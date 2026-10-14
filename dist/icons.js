@@ -1,4 +1,6 @@
 const paths = {
+pin: '<path d="m14 3 7 7-4 1-3 5-2-2-6 7 4-9-2-2 5-3 1-4Z"/>',
+pause: '<path d="M8 5v14M16 5v14"/>',
 board: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
 calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 11h18m-13 4h1m6 0h1m-8 3h1"/>',
 timeline: '<path d="M4 4v16h16M8 6h5m-3 5h8m-4 5h6"/>',
