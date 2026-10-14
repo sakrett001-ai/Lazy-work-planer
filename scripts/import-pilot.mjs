@@ -1,0 +1,15 @@
+import { readFile } from 'node:fs/promises';
+import { z } from 'zod';
+import { readState,updateState } from '../agent/lib/store.ts';
+import { validDate } from '../dist/domain.js';
+const file=process.argv[2];if(!file)throw new Error('Укажите путь к конфигурации пилота JSON.');
+const employee=z.object({id:z.string().min(1),name:z.string().min(1),role:z.enum(['employee','manager']),telegramId:z.string().regex(/^\d+$/).optional()});
+const task=z.object({id:z.string().min(1),title:z.string().min(1),employeeId:z.string(),project:z.string(),due:z.string().refine(validDate),status:z.enum(['planned','active','blocked','review','done']),contact:z.string(),summary:z.string(),needsDecision:z.boolean()});
+const schema=z.object({employees:z.array(employee),tasks:z.array(task),sources:z.array(z.unknown()).length(0),events:z.array(z.unknown()).length(0),settings:z.object({timezone:z.literal('Europe/Moscow'),startHour:z.number().int().min(0).max(23),endHour:z.number().int().min(1).max(24),minHoursBetween:z.number().min(1),excludedDates:z.array(z.string().refine(validDate))})});
+const input=schema.parse(JSON.parse(await readFile(file,'utf8')));
+for(const list of [input.employees.map(x=>x.id),input.tasks.map(x=>x.id),input.employees.map(x=>x.telegramId).filter(Boolean)])if(new Set(list).size!==list.length)throw new Error('Есть дубли ID.');
+if(!input.employees.some(p=>p.role==='manager'))throw new Error('Укажите руководителя.');
+if(input.tasks.some(t=>!input.employees.some(p=>p.id===t.employeeId)))throw new Error('Исполнитель задачи отсутствует в списке.');
+if(input.settings.startHour>=input.settings.endHour)throw new Error('Неверный интервал рабочего времени.');
+const old=readState();if(old.employees.length||old.tasks.length)throw new Error('База уже заполнена; начальный импорт не перезаписывает рабочие данные.');
+updateState(()=>input);console.log(`Пилот создан: ${input.employees.length} участников, ${input.tasks.length} задач. Отправки не выполнялись.`);

@@ -1,0 +1,11 @@
+node_modules
+.env*
+.eve
+.vercel
+.next
+.output
+.nitro
+.data/
+!.env.example
+.DS_Store
+*.tsbuildinfo

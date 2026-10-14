@@ -1,0 +1,12 @@
+{
+  "employees": [
+    { "id": "manager", "name": "Руководитель", "role": "manager" },
+    { "id": "employee-1", "name": "Тестовый сотрудник", "role": "employee" }
+  ],
+  "tasks": [
+    { "id": "П-001", "title": "Подготовить тестовый свод", "employeeId": "employee-1", "project": "Пилот", "due": "2026-10-16", "status": "active", "contact": "awaiting", "summary": "Ожидаем первое обновление", "needsDecision": false }
+  ],
+  "sources": [],
+  "events": [],
+  "settings": { "timezone": "Europe/Moscow", "startHour": 9, "endHour": 18, "minHoursBetween": 6, "excludedDates": [] }
+}
