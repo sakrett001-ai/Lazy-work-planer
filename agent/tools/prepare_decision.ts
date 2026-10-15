@@ -2,6 +2,7 @@ import { defineTool } from 'eve/tools';
 import { z } from 'zod';
 import { currentEmployee, updateState } from '../lib/store';
 import { saveDecisionDraft } from '../lib/decisions';
+import { webJobFor } from '../lib/prototype';
 
 export default defineTool({
   description:'Сохранить подготовленные моделью варианты решения и редактируемый черновик письма, плана или проверки. Только руководителю. Не отправляет сообщения и не меняет задачу или утверждённый срок.',
@@ -15,7 +16,10 @@ export default defineTool({
     references:z.array(z.object({sourceId:z.string().min(1),quote:z.string().trim().min(1).max(1200)})).max(8),
   }),
   execute(input, ctx) {
-    const actor=currentEmployee(ctx), callId=`${actor.id}:${ctx.callId}`;
+    const actor=currentEmployee(ctx);
+    const job = ctx.session.auth.current?.attributes?.webJobId ? webJobFor(ctx) : null;
+    if (job && job.taskId !== input.taskId) throw new Error('Черновик должен относиться к задаче текущей консультации.');
+    const callId=job ? `${job.id}:draft:${input.kind}` : `${actor.id}:${ctx.callId}`;
     let draft:ReturnType<typeof saveDecisionDraft>['draft']|undefined;
     updateState(state => { const result=saveDecisionDraft(state, actor, input, callId, new Date().toISOString()); draft=result.draft; return result.state; });
     return { status:'draft', delivered:false, taskChanged:false, draft };

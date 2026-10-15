@@ -1,0 +1,10 @@
+.git
+node_modules
+.data
+.env*
+*.sqlite*
+.eve
+.vercel
+.output
+artifacts
+tests

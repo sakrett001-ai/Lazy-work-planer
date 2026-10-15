@@ -1,4 +1,4 @@
-import type { State, Employee } from './store';
+import type { State, Employee } from './store.ts';
 import { taskMemory } from '../../dist/task-memory.js';
 
 export type DecisionInput = {

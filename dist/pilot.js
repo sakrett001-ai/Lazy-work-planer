@@ -1,3 +1,4 @@
+import { installPrototype } from './prototype-ui.js';
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[char]);
 const labels = { planned:'Запланировано', active:'В работе', blocked:'Есть препятствие', review:'На проверке', done:'Принято' };
@@ -15,7 +16,7 @@ function note(selector, text, success = false) { const el=$(selector); if (el) {
 function signOut() {
   identity=null; csrf=''; snapshot=null; selected=null; memory=null; epoch++; pendingReport=null; pendingDecision=null;
   $('#workspace').hidden=true; $('#identity').hidden=true; $('#login-panel').hidden=false; $('#loading').hidden=true;
-  $('#board').replaceChildren(); $('#task-content').replaceChildren(); if ($('#task-dialog').open) $('#task-dialog').close();
+  prototype.reset(); $('#board').replaceChildren(); $('#task-content').replaceChildren(); if ($('#task-dialog').open) $('#task-dialog').close();
 }
 async function api(path, body) {
   let response;
@@ -28,21 +29,17 @@ async function api(path, body) {
 }
 function setBusy(value) {
   busy=value;
-  document.querySelectorAll('#task-dialog [data-decision],#report-form button,#login-form button,#logout').forEach(el=>{el.disabled=value;});
+  document.querySelectorAll('#task-dialog button,#editor-dialog button,#login-form button,#logout,#new-task,#team').forEach(el=>{el.disabled=value||el.dataset.unavailable==='true';});
 }
 function renderBoard() {
   if (!snapshot || !identity) return;
   const metrics=snapshot.brief.metrics;
   $('#metrics').innerHTML=[['Открытые задачи',metrics.open],['Нужно решение',metrics.decision],['Есть препятствие',metrics.blocked],['Нет ответа',metrics.noReply]].map(([title,count])=>`<div class="metric"><span>${title}</span><strong>${Number(count)}</strong></div>`).join('');
   const search=$('#search').value.trim().toLocaleLowerCase('ru');
-  const tasks=snapshot.tasks.filter(t=>filter==='done'?t.status==='done':t.status!=='done'&&(filter!=='attention'||t.needsDecision||t.needsClarification||t.status==='blocked'||t.contact==='no_reply'))
+  const tasks=snapshot.tasks.filter(t=>filter==='done'?t.status==='done':t.status!=='done'&&(filter!=='attention'||prototype.isImportant(t)))
     .filter(t=>[t.id,t.title,t.project].join(' ').toLocaleLowerCase('ru').includes(search))
     .sort((a,b)=>Number(Boolean(b.needsDecision))-Number(Boolean(a.needsDecision))||Number(b.status==='blocked')-Number(a.status==='blocked')||(a.due||'9999').localeCompare(b.due||'9999'));
-  $('#board').innerHTML=tasks.length?tasks.map(t=>{
-    const status=Object.hasOwn(labels,t.status)?t.status:'planned', person=snapshot.employees.find(p=>p.id===t.employeeId)?.name||'Исполнитель';
-    const protocol=t.protocol?`<div>Протокол ${escape(t.protocol.number||'без номера')}${t.protocol.point?' · п. '+escape(t.protocol.point):''}</div>`:'';
-    return `<button class="task ${status} ${t.needsDecision?'needs-decision':''}" data-task="${escape(t.id)}"><span class="task-top"><span>${escape(t.id)}</span><span class="status">${labels[status]}</span></span><h2>${escape(t.title)}</h2><p class="summary">${escape(t.summary||'Ждём первое обновление.')}</p><div class="task-meta">${escape(person)}${t.project?' · '+escape(t.project):''}${protocol}<div>${t.due?'Срок: '+date(t.due):'Без установленного срока'}</div></div><span class="task-bottom"><span>${t.proposedDue?'Запрошен перенос':t.needsDecision?'Требуется решение':t.needsClarification?'Нужно уточнение':'Открыть задачу и память'}</span><span aria-hidden="true">↗</span></span></button>`;
-  }).join(''):'<div class="empty">Задач по выбранным условиям пока нет.</div>';
+  $('#board').innerHTML=prototype.renderBoard(tasks);
   $('#freshness').textContent='Обновлено '+date(snapshot.asOf,true)+' · московское время';
 }
 async function refresh() {
@@ -59,25 +56,12 @@ async function enter() {
   await refresh();
 }
 const sourceLink = id => { const index=memory?.sources.findIndex(s=>s.id===id)??-1; return index>=0?`<a href="#source-${index}">Сообщение-основание ↗</a>`:''; };
-function sourcesMarkup() { return memory.sources.map((s,i)=>`<article class="source" id="source-${i}"><p>${escape(s.text)}</p><small>${escape(snapshot.employees.find(p=>p.id===s.employeeId)?.name||'Сотрудник')} · ${date(s.occurredAt,true)}${s.simulated?' · пример':''}</small></article>`).join('')||'<p class="report-note">Исходных сообщений пока нет.</p>'; }
+function sourcesMarkup() { return memory.sources.map((s,i)=>`<article class="source" id="source-${i}"><p>${escape(s.text)}</p><small>${escape(s.authorName||snapshot.employees.find(p=>p.id===s.employeeId)?.name||'Участник')} · ${date(s.occurredAt,true)}${s.simulated?' · пример':''}</small></article>`).join('')||'<p class="report-note">Исходных сообщений пока нет.</p>'; }
 function eventMarkup(event) { return `<div class="history-item"><p>${escape(event.text)}</p>${sourceLink(event.sourceId)}<small>${date(event.at,true)}${event.kind==='late_report'?' · сохранено в истории без изменения текущего состояния':''}</small></div>`; }
 function renderMemory() {
   if (!selected || !memory || !identity) return;
-  const task=snapshot.tasks.find(t=>t.id===selected), current=memory.current;
-  const needDecision=memory.facts.find(f=>f.field==='needsDecision')?.value;
-  const actions=identity.role==='manager'?[...(current.proposedDue?[['approve_due','Согласовать срок'],['reject_due','Сохранить прежний срок']]:[]),...(current.status==='review'?[['accept','Принять результат']]:[]),...(needDecision&&current.status!=='review'&&!current.proposedDue?[['take_control','Взять вопрос в работу']]:[])]:[];
-  const own=task?.employeeId===identity.id && current.status!=='done';
-  $('#task-content').innerHTML=`<header class="detail-header"><span class="eyebrow">${escape(selected)} · ${escape(labels[current.status]||current.status)}</span><h2 id="task-title">${escape(memory.title)}</h2><p>Память и связи задачи · Источники сохраняются вместе с историей</p></header><p id="detail-message" class="message" role="status" aria-live="polite"></p>
-    ${actions.length?`<section class="detail-section"><h3>Решение руководителя</h3><p class="report-note">${current.proposedDue?`Предложено: ${date(current.proposedDue)}. Действующий срок: ${date(current.due)}.`:'Проверь результат и основания перед решением.'} Нажатие изменит задачу и сохранится в истории.</p><div class="actions">${actions.map(([action,label])=>`<button class="${action==='reject_due'?'secondary':'primary'}" data-decision="${action}">${label}</button>`).join('')}</div></section>`:''}
-    ${own?`<section class="detail-section"><h3>Твоё обновление</h3><form id="report-form"><label for="report-text">Что уже готово, что мешает и какой следующий шаг?</label><textarea id="report-text" name="text" required maxlength="4000" placeholder="Например: данные ещё не получены, нужна помощь с согласованием."></textarea><p class="report-note">Сообщение станет источником в памяти задачи. Перенос срока и приёмку подтверждает руководитель.</p><button type="submit" class="primary">Сохранить обновление ↗</button></form></section>`:''}
-    <section class="detail-section"><h3>Что известно сейчас</h3><div class="facts">${memory.facts.map(f=>{const value=f.field==='status'?labels[f.value]||f.value:typeof f.value==='boolean'?(f.value?'Да':'Нет'):f.value||'Не указано';const event=memory.timeline.find(e=>e.key===f.origin.eventId)||memory.recentDecisions.find(e=>e.key===f.origin.eventId);return `<div class="fact"><span>${fields[f.field]||escape(f.field)}</span><p>${escape(value)}</p>${sourceLink(f.origin.sourceId)||`<span>${event?'Изменение в истории: '+date(event.at,true):f.origin.eventId?'Сохранённое изменение карточки':'Данные карточки; сообщение-основание не задано'}</span>`}</div>`;}).join('')}</div></section>
-    ${memory.openQuestions.length?`<section class="detail-section"><h3>Осталось решить</h3><ul>${memory.openQuestions.map(q=>`<li>${escape(q)}</li>`).join('')}</ul></section>`:''}
-    <section class="detail-section"><h3>Сообщения-основания</h3><div id="sources">${sourcesMarkup()}</div></section>
-    ${memory.recentDecisions.length?`<section class="detail-section"><h3>Решения руководителя</h3>${memory.recentDecisions.map(eventMarkup).join('')}</section>`:''}
-    ${memory.drafts.length?`<section class="detail-section"><h3>Предложения для рассмотрения</h3>${memory.drafts.map(d=>`<article class="draft"><p>${escape(d.title)} · черновик</p><pre>${escape(d.body)}</pre><small>Не отправлено. Решение не принято.</small></article>`).join('')}</section>`:''}
-    <section class="detail-section"><h3>История</h3><div id="timeline">${memory.timeline.map(eventMarkup).join('')||'<p class="report-note">Первое обновление начнёт историю этой задачи.</p>'}</div>${memory.page.nextBefore?'<button id="older" class="secondary">Более ранние события</button>':''}</section>
-    <section class="detail-section"><details><summary>Связи в памяти · ${memory.graph.edges.length}</summary><ul>${memory.graph.edges.map(edge=>{const from=memory.graph.nodes.find(n=>n.id===edge.from),to=memory.graph.nodes.find(n=>n.id===edge.to);const relations={assigned_to:'назначено',required_by:'основание',part_of:'входит в проект',step_of:'этап задачи',depends_on:'зависит от',reports_on:'сообщение о задаче',recorded_for:'событие задачи',history_only:'более раннее сообщение',supported_by:'подтверждается источником',proposes:'предложение по задаче',context_from:'контекст из сообщения'};return `<li>${escape(from?.title||from?.name||from?.text?.slice(0,90)||'Запись')} → ${escape(relations[edge.relation]||edge.relation)} → ${escape(to?.title||to?.name||to?.text?.slice(0,90)||'Запись')}</li>`;}).join('')}</ul></details></section>`;
-  setBusy(busy);
+  $('#task-content').innerHTML=prototype.detailMarkup();
+  setBusy(busy); prototype.detailMounted();
 }
 async function openTask(id) {
   selected=id; memory=null; const version=epoch;
@@ -97,6 +81,7 @@ async function older() {
     if (!data.page.nextBefore) button.remove();
   } catch(error) {note('#detail-message',error.message);} finally {button.disabled=false;}
 }
+const prototype=installPrototype({api, refresh, openTask, renderBoard, note, setBusy, date, sourcesMarkup, sourceLink, eventMarkup, busy:()=>busy, get:()=>({identity,snapshot,selected,memory})});
 $('#login-form').addEventListener('submit',async event=>{
   event.preventDefault(); if(busy)return; setBusy(true); note('#login-message','');
   try { await api('login',{code:$('#login-code').value.trim()}); $('#login-code').value=''; await enter(); }
@@ -106,7 +91,7 @@ $('#logout').addEventListener('click',async()=>{if(busy)return;setBusy(true);try
 $('#refresh').addEventListener('click',()=>refresh().then(()=>note('#workspace-message','')).catch(error=>note('#workspace-message',error.message)));
 $('#search').addEventListener('input',renderBoard);
 document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));renderBoard();}));
-$('#board').addEventListener('click',event=>{const button=event.target.closest('[data-task]');if(button)openTask(button.dataset.task);});
+$('#board').addEventListener('click',event=>{const button=event.target.closest('[data-task]');if(button&&!busy)openTask(button.dataset.task);});
 $('#close-dialog').addEventListener('click',()=>{if(!busy)$('#task-dialog').close();});
 $('#task-dialog').addEventListener('cancel',event=>{if(busy)event.preventDefault();});
 $('#task-dialog').addEventListener('close',()=>{selected=null;memory=null;});
@@ -129,6 +114,6 @@ $('#task-dialog').addEventListener('submit',async event=>{
   catch(error){note('#detail-message',error.message);}
   finally{setBusy(false);}
 });
-const poll=setInterval(()=>{if(identity&&!document.hidden&&!$('#task-dialog').open&&!busy)refresh().catch(error=>note('#workspace-message',error.message));},15000);
+const poll=setInterval(()=>{if(identity&&prototype.canRefresh())refresh().catch(error=>note('#workspace-message',error.message));},15000);
 window.addEventListener('pagehide',()=>clearInterval(poll));
 enter().catch(error=>{if(!identity)signOut();if(error.status!==401)note(identity?'#workspace-message':'#login-message',error.message);});

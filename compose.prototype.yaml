@@ -1,0 +1,15 @@
+services:
+  assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile.prototype
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      ASSISTANT_SERVER_ORIGIN: http://localhost:8787
+      ASSISTANT_DELIVERY_ENABLED: "false"
+    volumes:
+      - assistant-data:/data
+    restart: unless-stopped
+volumes:
+  assistant-data:

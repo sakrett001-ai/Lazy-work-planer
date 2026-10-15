@@ -1,3 +1,4 @@
+import { assertWebReadOnly } from '../lib/prototype';
 import { defineTool } from 'eve/tools';
 import { z } from 'zod';
 import { currentEmployee, updateState } from '../lib/store';
@@ -11,6 +12,7 @@ export default defineTool({
     message: z.string().trim().min(1).max(2000).optional(),
   }),
   async execute({ taskId, kind, message }, ctx) {
+    assertWebReadOnly(ctx);
     const actor = currentEmployee(ctx);
     if (actor.role !== 'manager') throw new Error('Отправка доступна только руководителю');
     if (!ctx.callId) throw new Error('Нет устойчивого идентификатора вызова');

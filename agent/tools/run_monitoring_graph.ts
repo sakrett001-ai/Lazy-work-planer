@@ -1,3 +1,4 @@
+import { assertWebReadOnly } from '../lib/prototype';
 import { defineTool } from 'eve/tools';
 import { z } from 'zod';
 import { currentEmployee, getSource, updateState } from '../lib/store';
@@ -23,6 +24,7 @@ export default defineTool({
     }).optional(),
   }),
   execute(input, ctx) {
+    assertWebReadOnly(ctx);
     const actor = currentEmployee(ctx);
     if (input.eventType !== 'employee_feedback' && actor.role !== 'manager') throw new Error('Действие доступно только руководителю');
     if (input.eventType === 'employee_feedback' && !input.sourceId) throw new Error('Требуется SOURCE_ID исходного сообщения');

@@ -7,6 +7,8 @@ import { canReadTask, scopedWorkspace } from '../../dist/access.js';
 import { taskMemory } from '../../dist/task-memory.js';
 import { buildBrief, decide } from '../../dist/domain.js';
 import { runAssistantWorkflow } from '../../dist/langgraph-emb.js';
+import { preferences, prototypePaths, prototypeWrite, inviteParticipant, createAssistantJob, assistantJobs, versionOf } from './prototype.ts';
+import { proposal } from '../../dist/workspace-model.js';
 
 const reportSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), text: z.string().trim().min(1).max(4000) }).strict();
 const decisionSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), action: z.enum(['accept', 'approve_due', 'reject_due', 'take_control']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -16,6 +18,8 @@ const assets: Record<string, [string, string]> = {
   '/assistant/pilot.js': ['pilot.js', 'text/javascript; charset=utf-8'],
   '/assistant/pilot.css': ['pilot.css', 'text/css; charset=utf-8'],
   '/assistant/icons.js': ['icons.js', 'text/javascript; charset=utf-8'],
+  '/assistant/prototype.css': ['prototype.css', 'text/css; charset=utf-8'],
+  '/assistant/prototype-ui.js': ['prototype-ui.js', 'text/javascript; charset=utf-8'],
 };
 export const taskVersion = (task: unknown) => digest(JSON.stringify(task));
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -35,7 +39,7 @@ async function readJson(request: Request) {
   catch { throw new WebError(400, 'Не удалось прочитать запрос.'); }
 }
 
-async function route(request: Request) {
+async function route(request: Request, options: { assistantAvailable?: boolean }) {
   const url = new URL(request.url), path = url.pathname;
   if (request.method === 'GET' && assets[path]) {
     const [name, type] = assets[path];
@@ -58,13 +62,26 @@ async function route(request: Request) {
   if (path === '/assistant/api/session' && request.method === 'GET') return json({ actor: { id: actor.id, name: actor.name, role: actor.role || 'employee' }, csrf: auth.csrf });
   if (path === '/assistant/api/tasks' && request.method === 'GET') {
     const state = scopedWorkspace(readState(), actor), at = new Date().toISOString();
-    return json({ tasks: state.tasks.map((task: any) => ({ ...task, version: taskVersion(task) })), employees: state.employees, brief: buildBrief(state, at), asOf: at });
+    const ids = new Set(state.tasks.map((task: any) => task.id)), prefs = preferences(actor.id);
+    return json({ tasks: state.tasks.map((task: any) => ({ ...task, version: taskVersion(task) })), employees: state.employees, brief: buildBrief(state, at), asOf: at,
+      preferences: { pins: prefs.pins.filter(id => ids.has(id)), seen: Object.fromEntries(Object.entries(prefs.seen).filter(([id]) => ids.has(id))) },
+      assistant: { available: Boolean(options.assistantAvailable), mode: options.assistantAvailable ? 'eve' : 'rules' },
+      activity: state.events.slice(0, 12), examples: Boolean((state.settings as any).prototypeExamples), autoCheckins: Boolean((state.settings as any).prototypeAutoCheckins) });
   }
   if (path === '/assistant/api/memory' && request.method === 'GET') {
     const state = readState(), taskId = url.searchParams.get('taskId') || '';
     if (!canReadTask(actor, state.tasks.find(t => t.id === taskId))) throw new WebError(404, 'Задача не найдена.');
-    return json({ ...taskMemory(state, actor, taskId, { before: url.searchParams.get('before'), limit: 20 }), taskVersion: taskVersion(state.tasks.find(t => t.id === taskId)) });
+    const task = state.tasks.find(t => t.id === taskId);
+    const memory: any = taskMemory(state, actor, taskId, { before: url.searchParams.get('before'), limit: 20 });
+    return json({ ...memory, taskVersion: taskVersion(task), task, suggestion: actor.role === 'manager' ? proposal(task) : null,
+      drafts: actor.role === 'manager' ? (state.decisionDrafts || []).filter(d => d.taskId === taskId).slice(-30).map((draft: any) => ({ ...draft, version: versionOf(draft) })) : [],
+      conversation: state.sources.filter(s => s.taskId === taskId).slice(-50).map(s => ({ ...s, authorName: s.authorName || state.employees.find(p => p.id === s.employeeId)?.name || 'Участник' })) });
   }
+  if (path === '/assistant/api/assistant' && request.method === 'GET') return json({ jobs: assistantJobs(actor, url.searchParams.get('taskId') || '') });
+  if (path === '/assistant/api/assistant' && request.method === 'POST') return json(createAssistantJob(await readJson(request), actor, Boolean(options.assistantAvailable)));
+  if (path === '/assistant/api/invite' && request.method === 'POST') return json(inviteParticipant(await readJson(request), actor));
+  const action = path.replace('/assistant/api/', '');
+  if (request.method === 'POST' && prototypePaths.includes(action)) return json(prototypeWrite(action, await readJson(request), actor));
   if (path === '/assistant/api/report' && request.method === 'POST') {
     const input = reportSchema.parse(await readJson(request));
     let receipt: unknown;
@@ -111,9 +128,9 @@ async function route(request: Request) {
   return json({ error: 'Действие не найдено.' }, 404);
 }
 
-export async function handleDashboardRequest(request: Request) {
+export async function handleDashboardRequest(request: Request, options: { assistantAvailable?: boolean } = {}) {
   let response: Response;
-  try { response = await route(request); }
+  try { response = await route(request, options); }
   catch (error) {
     if (error instanceof WebError) response = json({ error: error.message }, error.status);
     else if (error instanceof z.ZodError) response = json({ error: 'Проверьте заполнение полей запроса.' }, 400);

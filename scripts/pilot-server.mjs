@@ -3,10 +3,12 @@ import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { handleDashboardRequest } from '../agent/lib/dashboard-api.ts';
 import { serverOrigin } from '../agent/lib/web-auth.ts';
+import { updateState } from '../agent/lib/store.ts';
+import { monitorWorkspace } from '../agent/lib/workspace-monitor.ts';
 
-// Same handlers as the eve dashboard channel. No model, scheduler or transport runs here.
+// Same handlers as eve. Only in-app monitoring runs here; no model or external transport.
 export function createPilotServer() {
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       const origin = serverOrigin();
       if (req.headers.host?.toLowerCase() !== new URL(origin).host.toLowerCase()) {
@@ -22,6 +24,16 @@ export function createPilotServer() {
       res.end(Buffer.from(await response.arrayBuffer()));
     } catch { res.writeHead(503, { 'cache-control': 'no-store' }); res.end('Workspace unavailable'); }
   });
+  let timer;
+  server.on('listening', () => {
+    timer = setInterval(() => {
+      try { updateState(state => monitorWorkspace(state)); }
+      catch { console.error('Проверка ожидания ответа отложена: хранилище недоступно.'); }
+    }, 60000);
+    timer.unref();
+  });
+  server.on('close', () => clearInterval(timer));
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

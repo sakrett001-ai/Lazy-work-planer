@@ -43,13 +43,13 @@ export function taskMemory(state, actor, taskId, { before = null, limit = 20 } =
   if (task.latestSourceId) sourceIds.add(task.latestSourceId);
   const localDrafts = Object.entries(scoped.drafts).map(([id, draft]) => ({ ...draft, id }));
   const drafts = [...scoped.decisionDrafts, ...localDrafts].filter(d => d.taskId === taskId).slice(-5)
-    .map(d => ({ id: d.id, title: d.title, body: d.body, status: 'draft', references: d.references || [], contextSourceId: d.sourceId || null, createdAt: d.createdAt || d.savedAt || d.updatedAt || null }));
+    .map(d => ({ id: d.id, title: d.title, body: d.body, status: d.status || 'draft', kind: d.kind || d.type, reason: d.reason || '', options: d.options || [], generator: d.generator || 'assistant', references: d.references || [], contextSourceId: d.sourceId || null, createdAt: d.createdAt || d.savedAt || d.updatedAt || null }));
   for (const draft of drafts) {
     for (const ref of draft.references) sourceIds.add(ref.sourceId);
     if (draft.contextSourceId) sourceIds.add(draft.contextSourceId);
   }
   const sources = scoped.sources.filter(s => s.taskId === taskId && sourceIds.has(s.id))
-    .map(s => ({ id: s.id, taskId, employeeId: s.employeeId, text: s.text, occurredAt: s.occurredAt || s.receivedAt, receivedAt: s.receivedAt, simulated: Boolean(s.simulated) }));
+    .map(s => ({ id: s.id, taskId, employeeId: s.employeeId, authorName: s.authorName || null, text: s.text, occurredAt: s.occurredAt || s.receivedAt, receivedAt: s.receivedAt, simulated: Boolean(s.simulated) }));
   const decisions = allEvents.filter(e => e.kind === 'decision').slice(0, 5);
   const openQuestions = [];
   if (task.needsClarification) openQuestions.push(task.clarificationQuestion || 'Нужно уточнить фактический результат и следующий шаг.');
