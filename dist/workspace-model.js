@@ -104,11 +104,37 @@ export function createWorkspace(now = new Date()) {
     { id: 'П-109', title: 'Обновить календарь регулярных отчётов', employeeId: 'irina', department: 'accounts', project: 'Регулярная работа', due: d(6), dueTime: '18:00', status: 'planned', summary: 'Сверить периодичность отчётов и назначить контрольные даты.', contact: 'answered', start: d(2) }
   );
   state.events = state.events.map(e => ({ ...e, at: d(0) + 'T09:15:00+03:00' }));
+  state.notifications = [
+    { id: 'notif:seed:102', at: d(0) + 'T09:16:00+03:00', to: 'manager', recipientName: 'Руководитель', fromEmployeeId: 'elena', taskId: 'П-102', kind: 'blocker_escalation', severity: 'coral', title: 'Препятствие по П-102 (Елена)', text: 'Елена сообщила о проблеме: «Нет данных о численности и ФОТ от двух подразделений». Требуется содействие руководителя.', channel: 'dashboard_and_telegram' },
+    { id: 'notif:seed:103', at: d(0) + 'T09:18:00+03:00', to: 'manager', recipientName: 'Руководитель', fromEmployeeId: 'dmitry', taskId: 'П-103', kind: 'deadline_escalation', severity: 'amber', title: 'Запрос переноса срока П-103 (Дмитрий)', text: `Дмитрий просит перенести согласование ТЗ на ${shortDate(d(3), true)} из-за дополнительных требований.`, channel: 'dashboard_and_telegram' },
+    { id: 'notif:seed:105', at: d(0) + 'T09:20:00+03:00', to: 'anna', recipientName: 'Анна', taskId: 'П-105', kind: 'check_in', severity: 'violet', title: 'Запрос статуса у Анны (П-105)', text: 'Анна, подскажите актуальный статус по реестру рисков (П-105): что уже готово и есть ли препятствия?', channel: 'telegram_or_app' }
+  ];
+  state.graphRuns = [
+    {
+      id: 'run:seed:102',
+      at: d(0) + 'T09:16:00+03:00',
+      eventType: 'employee_feedback',
+      actorId: 'elena',
+      taskId: 'П-102',
+      message: 'Расчёты готовы. Для итогового свода не хватает данных о численности и ФОТ от двух подразделений. Нужна помощь руководителя.',
+      classification: { kind: 'blocked', confidence: 0.94, needsDecision: true },
+      embContext: { dimension: 64, topMatches: [{ id: 'task:П-102', taskId: 'П-102', title: 'П-102 · Материалы к Комиссии по бюджету', score: 0.91 }] },
+      trace: [
+        { step: 1, node: 'ingest_signal', next: 'emb_retrieve', route: 'direct', durationMs: 1, outputSummary: 'Принят сигнал [employee_feedback] от Елена по П-102' },
+        { step: 2, node: 'emb_retrieve', next: 'classify_intent', route: 'direct', durationMs: 2, outputSummary: 'Emb-поиск (64d): найдено 4 релевантных записей, задача П-102' },
+        { step: 3, node: 'classify_intent', next: 'validate_guardrails', route: 'direct', durationMs: 1, outputSummary: 'Классификация: blocked (точность 94%)' },
+        { step: 4, node: 'validate_guardrails', next: 'mutate_task_state', route: 'condition:mutate', durationMs: 1, outputSummary: 'Guardrails пройдены для П-102 (цитата проверена, срок защищён)' },
+        { step: 5, node: 'mutate_task_state', next: 'dispatch_notifications', route: 'direct', durationMs: 1, outputSummary: 'Обновлена задача П-102: статус → blocked' },
+        { step: 6, node: 'dispatch_notifications', next: '__end__', route: 'direct', durationMs: 1, outputSummary: 'Уведомлений создано: 2' }
+      ],
+      assistantReply: 'Зафиксировал препятствие по П-102 с вашей цитатой. Передал сигнал руководителю для содействия.'
+    }
+  ];
   return state;
 }
 export function migrateWorkspace(saved, now = new Date()) {
   if (!saved || !Array.isArray(saved.tasks) || !Array.isArray(saved.employees) || !Array.isArray(saved.events) || !Array.isArray(saved.sources)) return createWorkspace(now);
-  if (saved.version === 2) return { ...saved, drafts: saved.drafts || {}, chat: saved.chat || [], settings: { motion: true, achievements: true, ...saved.settings } };
+  if (saved.version === 2) return { ...saved, drafts: saved.drafts || {}, chat: saved.chat || [], notifications: Array.isArray(saved.notifications) ? saved.notifications : [], graphRuns: Array.isArray(saved.graphRuns) ? saved.graphRuns : [], settings: { motion: true, achievements: true, ...saved.settings } };
   const next = createWorkspace(now);
   next.tasks = next.tasks.map(t => {
     const old = saved.tasks.find(item => item.id === t.id);
@@ -155,6 +181,19 @@ export function addTask(state, input, now = new Date()) {
   const task = { id, title: input.title.trim().slice(0, 160), summary: (input.summary || '').trim().slice(0, 2000), employeeId: person.id, department: person.department, project: input.project?.trim() || 'Мои поручения', status: 'planned', contact: 'answered', start: dayKey(now), due: input.due || null, dueTime: input.dueTime || '18:00', needsDecision: false };
   if (input.protocolNumber || input.protocolPoint || input.protocolDate) task.protocol = { number: input.protocolNumber?.trim() || '', point: input.protocolPoint?.trim() || '', date: input.protocolDate || null };
   next.tasks.push(task); next.events.unshift({ key: `created:${id}`, taskId: id, at: new Date(now).toISOString(), kind: 'created', text: 'Задача создана руководителем' });
+  next.notifications ||= [];
+  next.notifications.unshift({
+    id: `notif:${id}:assigned:${new Date(now).getTime()}`,
+    at: new Date(now).toISOString(),
+    to: person.id,
+    recipientName: person.name,
+    taskId: id,
+    kind: 'task_assigned',
+    severity: 'cyan',
+    title: `Поступила новая задача ${id} для ${person.name}`,
+    text: `${person.name}, назначено поручение ${id} «${task.title}»${task.due ? ` (срок ${shortDate(task.due, true)})` : ' без фиксированного срока'}.`,
+    channel: 'telegram_or_app'
+  });
   return { state: next, task };
 }
 export function editTask(state, id, input, now = new Date()) {

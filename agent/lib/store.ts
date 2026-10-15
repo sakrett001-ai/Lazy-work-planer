@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 export type Employee={id:string;name:string;role?:'employee'|'manager';telegramId?:string;[key:string]:unknown};
 export type Source={id:string;employeeId:string;taskId:string|null;text:string;receivedAt:string;occurredAt?:string;dispatched?:boolean};
-export type State={employees:Employee[];tasks:any[];sources:any[];events:any[];decisionDrafts?:any[];settings:{timezone:string;startHour:number;endHour:number;minHoursBetween:number;excludedDates:string[]}};
+export type State={employees:Employee[];tasks:any[];sources:any[];events:any[];decisionDrafts?:any[];notifications?:any[];graphRuns?:any[];settings:{timezone:string;startHour:number;endHour:number;minHoursBetween:number;excludedDates:string[]}};
 const empty:State={employees:[],tasks:[],sources:[],events:[],settings:{timezone:'Europe/Moscow',startHour:9,endHour:18,minHoursBetween:6,excludedDates:[]}};
 let connection:DatabaseSync|undefined;
 export function database(){
