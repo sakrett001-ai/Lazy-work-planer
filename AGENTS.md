@@ -4,11 +4,12 @@
 
 Lazy Work Planer is a Russian-language manager assistant prototype. Read `README.md` for current capabilities and `docs/ROADMAP.md` for planned work.
 
-- `dist/` contains the editable static frontend source, not disposable generated output. It works with fictional data and localStorage; its chat is deterministic.
-- `agent/` is the separate eve server scaffold. The static frontend is not connected to this server yet. Do not describe demo filters as server authorization or browser-tab visibility as employee presence.
+- `dist/` contains editable frontend source, not disposable generated output. The original demo uses fictional data, localStorage and deterministic chat; the separate pilot workspace uses the server API.
+- `agent/` is the eve server scaffold. `dist/index.html` is still a browser-only demo; `dist/pilot.html` is the separate authenticated workspace served at `/assistant/workspace` by the dashboard channel or `npm run pilot:serve`. Both server paths use the same handlers and SQLite. Do not describe demo filters as server authorization or browser-tab visibility as employee presence.
 - Preserve the existing Sites project ID in `.openai/hosting.json`. A GitHub commit does not publish to Sites automatically.
 - Keep real tokens, working data, databases and local runtime directories out of version control. `.env.example` contains empty placeholders only.
 - `npm test` and `npm run typecheck` are the available local checks. Server build and live-provider validation have separate status in the README.
+- Keep the shared dashboard handlers free of model and transport side effects. Browser identities come from server sessions; never put ASSISTANT_ADMIN_TOKEN in frontend code. Preserve idempotency, source provenance and task-version checks for writes. Follow `docs/PILOT.md` for local entry points and `docs/ROADMAP.md` for stage boundaries.
 
 This project uses the eve framework: an agent is a directory of files under `agent/`, and eve compiles and runs it.
 
