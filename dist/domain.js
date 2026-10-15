@@ -1,4 +1,5 @@
 /** Pure task rules shared by the demonstration and the agent's tools. */
+import { rememberChanges } from './task-memory.js';
 export const STATUS = { planned: 'Запланировано', active: 'В работе', blocked: 'Есть препятствие', review: 'На проверке', done: 'Принято' };
 export const clone = value => JSON.parse(JSON.stringify(value));
 export function validDate(s) { if(typeof s!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;const d=new Date(s+'T12:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===s; }
@@ -7,6 +8,7 @@ export function mentionedTaskIds(text,tasks){const tokens=String(text).split(/[\
 export function taskById(state,id) { const task=state.tasks.find(t=>t.id===id); if(!task)throw new Error('Задача не найдена'); return task; }
 export function applyReport(state, report, actor, source) {
   const next=clone(state), task=taskById(next,report.taskId);
+  const before=clone(task);
   if (source.employeeId !== actor.id || source.taskId !== task.id || task.employeeId !== actor.id) throw new Error('Нет доступа к этой задаче или источнику');
   if (next.events.some(e=>e.key===source.id)) return next;
   if (!report.quote?.trim() || !source.text.includes(report.quote)) throw new Error('В сообщении нет указанной цитаты');
@@ -15,16 +17,18 @@ export function applyReport(state, report, actor, source) {
   if (!report.summary?.trim()) throw new Error('Нужна краткая фактическая сводка');
   if (task.status==='done') throw new Error('Принятая задача закрыта; открыть её может руководитель');
   const reportedAt=source.occurredAt||source.receivedAt;
-  if(task.lastReply&&Date.parse(reportedAt)<Date.parse(task.lastReply)){
+  if(!Number.isFinite(Date.parse(reportedAt))||!Number.isFinite(Date.parse(source.receivedAt)))throw new Error('Некорректная дата исходного сообщения');
+  if((task.lastReply&&Date.parse(reportedAt)<Date.parse(task.lastReply))||(task.lastDecisionAt&&Date.parse(reportedAt)<Date.parse(task.lastDecisionAt))){
     next.sources.push(clone(source));next.events.unshift({key:source.id,taskId:task.id,kind:'late_report',at:source.receivedAt,text:'Получено более раннее сообщение. Актуальный статус сохранён.',sourceId:source.id});return next;
   }
   task.lastReply=reportedAt;
   task.contact='answered';
   task.latestSourceId=source.id;
   // An unclear reply is evidence of contact, not evidence of progress.
-  if (report.kind==='unclear') task.needsClarification=true;
+  if (report.kind==='unclear') {task.needsClarification=true;task.clarificationQuestion=report.question||'Что уже готово и какой следующий шаг?';}
   else {
     task.needsClarification=false;
+    task.clarificationQuestion='';
     task.summary=report.summary;
     task.reportedAt=source.receivedAt;
     if(report.kind==='progress') task.status=task.status==='planned'?'active':task.status;
@@ -35,7 +39,8 @@ export function applyReport(state, report, actor, source) {
     if(report.needsDecision===true) { task.needsDecision=true; task.nextAction=report.nextAction||'Уточнить требуемое решение'; }
   }
   next.sources.push(clone(source));
-  next.events.unshift({key:source.id,taskId:task.id,kind:report.kind,at:source.receivedAt,text:report.kind==='unclear'?'Ответ получен; требуется уточнение':report.summary,sourceId:source.id});
+  const changes=rememberChanges(task,before,source.id,source.id);
+  next.events.unshift({key:source.id,taskId:task.id,kind:report.kind,at:source.receivedAt,occurredAt:reportedAt,text:report.kind==='unclear'?'Ответ получен; требуется уточнение':report.summary,sourceId:source.id,actorId:actor.id,quote:report.quote,changes});
   return next;
 }
 export function markNoReply(state,id,at,key) {
@@ -47,13 +52,16 @@ export function markNoReply(state,id,at,key) {
 }
 export function decide(state,id,action,actor,at) {
   if(actor.role!=='manager')throw new Error('Решение доступно руководителю');
-  const next=clone(state),task=taskById(next,id); let text;
+  const next=clone(state),task=taskById(next,id),before=clone(task); let text;
   if(action==='accept' && task.status==='review') {task.status='done';task.needsDecision=false;task.nextAction='';text='Руководитель принял результат';}
   else if(action==='approve_due' && task.proposedDue) {const old=task.due;task.due=task.proposedDue;task.proposedDue=null;task.needsDecision=false;task.nextAction='';text=`Перенос согласован: ${old} → ${task.due}`;}
   else if(action==='reject_due' && task.proposedDue) {task.proposedDue=null;task.needsDecision=false;task.nextAction='Сохранить согласованный срок';text='Перенос отклонён, исходный срок сохранён';}
   else if(action==='take_control' && task.needsDecision) {task.needsDecision=false;task.nextAction='Вопрос взят руководителем в работу';text='Вопрос взят руководителем в работу; препятствие сохраняется';}
   else throw new Error('Действие не соответствует состоянию задачи');
-  next.events.unshift({key:`decision:${id}:${at}:${action}`,taskId:id,kind:'decision',at,text}); return next;
+  const key=`decision:${id}:${at}:${action}`;
+  task.lastDecisionAt=at;
+  const changes=rememberChanges(task,before,key);
+  next.events.unshift({key,taskId:id,kind:'decision',action,actorId:actor.id||null,at,text,changes}); return next;
 }
 export function metrics(state,now) {
   const open=state.tasks.filter(t=>t.status!=='done'), today=localDateKey(now,state.settings?.timezone||'Europe/Moscow');

@@ -2,9 +2,10 @@ import { defineTool } from 'eve/tools';
 import { z } from 'zod';
 import { currentEmployee, readState } from '../lib/store';
 import { semanticSearch, findSimilarTasks } from '../../dist/langgraph-emb.js';
+import { scopedWorkspace } from '../../dist/access.js';
 
 export default defineTool({
-  description: 'Семантический векторный поиск (Emb 64d + cosine similarity) по задачам, сообщениям сотрудников и черновикам решений. Для сотрудника фильтрует только его задачи; руководитель видит всё пространство.',
+  description: 'Поиск кандидатов по текстовому сходству в доступных задачах и сообщениях. Сотруднику доступны только свои задачи; черновики решений доступны руководителю. Сходство не является достоверностью факта. Для истории используй get_task_memory.',
   inputSchema: z.object({
     query: z.string().trim().min(1).max(500),
     topK: z.number().int().min(1).max(15).optional(),
@@ -13,19 +14,16 @@ export default defineTool({
   }),
   execute({ query, topK = 5, kind = 'all', similarToTaskId }, ctx) {
     const actor = currentEmployee(ctx);
-    const state = readState();
-    const allowedTaskIds = actor.role === 'manager'
-      ? null
-      : new Set(state.tasks.filter(t => t.employeeId === actor.id).map(t => t.id));
+    const state = scopedWorkspace(readState(), actor);
+    const allowedTaskIds = new Set<string>(state.tasks.map((t: { id: string }) => t.id));
 
     const searchResult = semanticSearch(state, query, {
       topK,
       kind,
-      scopeIds: allowedTaskIds,
     });
 
-    const similar = similarToTaskId && (actor.role === 'manager' || allowedTaskIds?.has(similarToTaskId))
-      ? findSimilarTasks(state, similarToTaskId, 3)
+    const similar = similarToTaskId && allowedTaskIds.has(similarToTaskId)
+      ? findSimilarTasks(state, similarToTaskId, 3, allowedTaskIds)
       : [];
 
     return {

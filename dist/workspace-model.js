@@ -1,5 +1,6 @@
 import { initialState, scenarios } from './fixtures.js';
 import { clone, validDate, localDateKey, applyReport, decide } from './domain.js';
+import { rememberChanges } from './task-memory.js';
 
 export const TIMEZONE = 'Europe/Moscow';
 export const DAY = 86400000;
@@ -70,7 +71,7 @@ export function createWorkspace(now = new Date()) {
   state.version = 2; state.createdAt = new Date(now).toISOString(); state.drafts = {}; state.chat = [];
   state.settings = { ...state.settings, motion: true, achievements: true, autoArchive: true };
   state.employees = [
-    { id: 'manager', name: 'Сергей', initials: 'С', department: 'planning', team: 'ПФУ', color: 'violet' },
+    { id: 'manager', role: 'manager', name: 'Сергей', initials: 'С', department: 'planning', team: 'ПФУ', color: 'violet' },
     ...state.employees.map(p => ({ ...p, department: p.id === 'dmitry' ? 'procurement' : p.id === 'irina' ? 'accounts' : 'planning', color: ({ anna: 'cyan', elena: 'violet', dmitry: 'amber', irina: 'mint' })[p.id] }))
   ];
   const metadata = [
@@ -107,34 +108,15 @@ export function createWorkspace(now = new Date()) {
   state.notifications = [
     { id: 'notif:seed:102', at: d(0) + 'T09:16:00+03:00', to: 'manager', recipientName: 'Руководитель', fromEmployeeId: 'elena', taskId: 'П-102', kind: 'blocker_escalation', severity: 'coral', title: 'Препятствие по П-102 (Елена)', text: 'Елена сообщила о проблеме: «Нет данных о численности и ФОТ от двух подразделений». Требуется содействие руководителя.', channel: 'dashboard_and_telegram' },
     { id: 'notif:seed:103', at: d(0) + 'T09:18:00+03:00', to: 'manager', recipientName: 'Руководитель', fromEmployeeId: 'dmitry', taskId: 'П-103', kind: 'deadline_escalation', severity: 'amber', title: 'Запрос переноса срока П-103 (Дмитрий)', text: `Дмитрий просит перенести согласование ТЗ на ${shortDate(d(3), true)} из-за дополнительных требований.`, channel: 'dashboard_and_telegram' },
-    { id: 'notif:seed:105', at: d(0) + 'T09:20:00+03:00', to: 'anna', recipientName: 'Анна', taskId: 'П-105', kind: 'check_in', severity: 'violet', title: 'Запрос статуса у Анны (П-105)', text: 'Анна, подскажите актуальный статус по реестру рисков (П-105): что уже готово и есть ли препятствия?', channel: 'telegram_or_app' }
+    { id: 'notif:seed:105', at: d(0) + 'T09:20:00+03:00', to: 'anna', recipientName: 'Анна', taskId: 'П-105', kind: 'check_in', severity: 'violet', title: 'Запрос статуса у Анны (П-105)', text: 'Анна, подскажите актуальный статус по реестру рисков (П-105): что уже готово и есть ли препятствия?', channel: 'dashboard', delivery: 'prepared' }
   ];
-  state.graphRuns = [
-    {
-      id: 'run:seed:102',
-      at: d(0) + 'T09:16:00+03:00',
-      eventType: 'employee_feedback',
-      actorId: 'elena',
-      taskId: 'П-102',
-      message: 'Расчёты готовы. Для итогового свода не хватает данных о численности и ФОТ от двух подразделений. Нужна помощь руководителя.',
-      classification: { kind: 'blocked', confidence: 0.94, needsDecision: true },
-      embContext: { dimension: 64, topMatches: [{ id: 'task:П-102', taskId: 'П-102', title: 'П-102 · Материалы к Комиссии по бюджету', score: 0.91 }] },
-      trace: [
-        { step: 1, node: 'ingest_signal', next: 'emb_retrieve', route: 'direct', durationMs: 1, outputSummary: 'Принят сигнал [employee_feedback] от Елена по П-102' },
-        { step: 2, node: 'emb_retrieve', next: 'classify_intent', route: 'direct', durationMs: 2, outputSummary: 'Emb-поиск (64d): найдено 4 релевантных записей, задача П-102' },
-        { step: 3, node: 'classify_intent', next: 'validate_guardrails', route: 'direct', durationMs: 1, outputSummary: 'Классификация: blocked (точность 94%)' },
-        { step: 4, node: 'validate_guardrails', next: 'mutate_task_state', route: 'condition:mutate', durationMs: 1, outputSummary: 'Guardrails пройдены для П-102 (цитата проверена, срок защищён)' },
-        { step: 5, node: 'mutate_task_state', next: 'dispatch_notifications', route: 'direct', durationMs: 1, outputSummary: 'Обновлена задача П-102: статус → blocked' },
-        { step: 6, node: 'dispatch_notifications', next: '__end__', route: 'direct', durationMs: 1, outputSummary: 'Уведомлений создано: 2' }
-      ],
-      assistantReply: 'Зафиксировал препятствие по П-102 с вашей цитатой. Передал сигнал руководителю для содействия.'
-    }
-  ];
+  state.notifications = state.notifications.map(n => ({ ...n, delivery: 'prepared', channel: 'dashboard' }));
+  state.graphRuns = [];
   return state;
 }
 export function migrateWorkspace(saved, now = new Date()) {
   if (!saved || !Array.isArray(saved.tasks) || !Array.isArray(saved.employees) || !Array.isArray(saved.events) || !Array.isArray(saved.sources)) return createWorkspace(now);
-  if (saved.version === 2) return { ...saved, drafts: saved.drafts || {}, chat: saved.chat || [], notifications: Array.isArray(saved.notifications) ? saved.notifications : [], graphRuns: Array.isArray(saved.graphRuns) ? saved.graphRuns : [], settings: { motion: true, achievements: true, ...saved.settings } };
+  if (saved.version === 2) return { ...saved, employees: saved.employees.map(p => ({ ...p, role: p.id === 'manager' ? 'manager' : 'employee' })), drafts: saved.drafts || {}, chat: saved.chat || [], notifications: Array.isArray(saved.notifications) ? saved.notifications.map(n => ({ ...n, delivery: n.delivery || 'unverified' })) : [], graphRuns: Array.isArray(saved.graphRuns) ? saved.graphRuns.filter(run => run.version === 2) : [], settings: { motion: true, achievements: true, ...saved.settings } };
   const next = createWorkspace(now);
   next.tasks = next.tasks.map(t => {
     const old = saved.tasks.find(item => item.id === t.id);
@@ -192,7 +174,7 @@ export function addTask(state, input, now = new Date()) {
     severity: 'cyan',
     title: `Поступила новая задача ${id} для ${person.name}`,
     text: `${person.name}, назначено поручение ${id} «${task.title}»${task.due ? ` (срок ${shortDate(task.due, true)})` : ' без фиксированного срока'}.`,
-    channel: 'telegram_or_app'
+    channel: 'dashboard', delivery: 'prepared'
   });
   return { state: next, task };
 }
@@ -210,12 +192,16 @@ export function editTask(state, id, input, now = new Date()) {
   if (!sameProtocol) changed.push('protocol');
   if (!changed.length) return next;
   if (changed.includes('due') && task.proposedDue === task.due) { task.proposedDue = null; task.needsDecision = ['review','blocked'].includes(task.status); }
+  const evidence=rememberChanges(task,current,`edit:${id}:${new Date(now).toISOString()}`);
+  task.lastDecisionAt=new Date(now).toISOString();
   next.events.unshift({ key: `edit:${id}:${new Date(now).toISOString()}`, taskId:id, kind:'edited', at:new Date(now).toISOString(), text:`Руководитель изменил: ${changed.map(k=>labels[k]||'реквизиты').join(', ')}${changed.includes('due')?`. Срок: ${current.due||'не задан'} → ${task.due||'не задан'}`:''}` });
+  next.events[0].changes=evidence;next.events[0].actorId=VIEWER.id;
   return next;
 }
 export function savePhase(state, taskId, phaseId, input, now = new Date()) {
   const next = clone(state), task = next.tasks.find(t => t.id === taskId);
   if (!task || task.status === 'done') throw new Error('Архивные этапы доступны только для чтения');
+  const before=clone(task);
   if (!input.title?.trim() || !validDate(input.start) || !validDate(input.end)) throw new Error('Укажи название и корректные даты этапа');
   if (input.start > input.end) throw new Error('Завершение этапа не может быть раньше начала');
   task.phases ||= [];
@@ -235,6 +221,9 @@ export function savePhase(state, taskId, phaseId, input, now = new Date()) {
   if (phase) Object.assign(phase, value); else task.phases.push(value);
   if (!phase && task.status === 'review') { task.status = 'active'; task.needsDecision = Boolean(task.proposedDue); task.nextAction = task.proposedDue ? 'Решить вопрос о переносе срока' : ''; }
   next.events.unshift({ key:`phase-edit:${id}:${new Date(now).toISOString()}`, taskId, kind:'phase_edit', at:new Date(now).toISOString(), text:`${phase?'Изменён':'Добавлен'} этап «${value.title}»` });
+  next.events[0].changes=rememberChanges(task,before,next.events[0].key);
+  next.events[0].actorId=VIEWER.id;
+  if(Object.keys(next.events[0].changes).length)task.lastDecisionAt=next.events[0].at;
   return next;
 }
 export function changeTask(state, id, action, now = new Date()) {
@@ -247,6 +236,7 @@ export function changeTask(state, id, action, now = new Date()) {
   const next = clone(state), task = next.tasks.find(t => t.id === id);
   if (!task) throw new Error('Задача не найдена');
   const previous = task.status;
+  const before=clone(task);
   const changes = {
     start: ['active', 'Работа начата'],
     review: ['review', 'Результат передан на проверку'],
@@ -261,11 +251,14 @@ export function changeTask(state, id, action, now = new Date()) {
   if (action === 'unblock') { task.blocker = ''; task.phases?.forEach(p => { p.blocked = false; }); }
   if (action === 'reopen') task.closedAt = null;
   task.nextAction = action === 'review' ? 'Проверить и принять результат' : task.proposedDue ? 'Решить вопрос о переносе срока' : '';
-  next.events.unshift({ key: `${action}:${id}:${at}`, taskId: id, kind: action, at, text: changes[action][1] }); return next;
+  const eventId=`${action}:${id}:${at}`;
+  const evidence=rememberChanges(task,before,eventId);task.lastDecisionAt=at;
+  next.events.unshift({ key: eventId, taskId: id, kind: action, actorId:VIEWER.id, at, text: changes[action][1], changes:evidence }); return next;
 }
 export function setPhase(state, taskId, phaseId, done, now = new Date()) {
   const next = clone(state), task = next.tasks.find(t => t.id === taskId);
   if (!task || task.status === 'done') throw new Error('Архивная задача доступна только для чтения');
+  const before=clone(task);
   const phase = task.phases?.find(p => p.id === phaseId);
   if (!phase) throw new Error('Этап не найден');
   if (done && phase.dependsOn && !task.phases.find(p => p.id === phase.dependsOn)?.done) throw new Error('Сначала заверши предшествующий этап');
@@ -276,7 +269,10 @@ export function setPhase(state, taskId, phaseId, done, now = new Date()) {
     task.phases.forEach(p => { if (reopen.has(p.id)) p.done = false; });
     if (task.status === 'review') { task.status = 'active'; task.needsDecision = Boolean(task.proposedDue); task.nextAction = task.proposedDue ? 'Решить вопрос о переносе срока' : ''; }
   } else phase.done = true;
-  next.events.unshift({ key: `phase:${taskId}:${phaseId}:${new Date(now).toISOString()}`, taskId, kind: 'phase', at: new Date(now).toISOString(), text: `${done ? 'Завершён' : 'Снова открыт'} этап «${phase.title}»` }); return next;
+  next.events.unshift({ key: `phase:${taskId}:${phaseId}:${new Date(now).toISOString()}`, taskId, kind: 'phase', at: new Date(now).toISOString(), text: `${done ? 'Завершён' : 'Снова открыт'} этап «${phase.title}»` });
+  next.events[0].changes=rememberChanges(task,before,next.events[0].key);next.events[0].actorId=VIEWER.id;
+  if(Object.keys(next.events[0].changes).length)task.lastDecisionAt=next.events[0].at;
+  return next;
 }
 export function calendarDays(month) {
   const first = month + '-01', weekday = new Date(first + 'T12:00:00Z').getUTCDay(), start = shiftDay(first, -((weekday + 6) % 7));

@@ -53,7 +53,7 @@ test('Emb (64d): семантический поиск и поиск похож�
   assert.ok(similar.every(s => s.taskId !== 'П-102'));
 });
 
-test('LangGraph StateGraph: поддерживает узлы, условные переходы, редьюсеры каналов и трассировку', () => {
+test('Локальный StateGraph: поддерживает узлы, условные переходы, редьюсеры каналов и трассировку', () => {
   const g = new StateGraph({
     count: { reducer: (a = 0, b = 0) => a + b, default: () => 0 },
     log: { reducer: (a = [], b = []) => [...a, ...b], default: () => [] },
@@ -77,7 +77,7 @@ test('LangGraph StateGraph: поддерживает узлы, условные 
   assert.equal(res.trace[0].route, 'condition:go_b');
 });
 
-test('LangGraph Workflow: обработка фидбека сотрудников (блокер, перенос срока, готовность, снятие блокера, неясный ответ)', () => {
+test('Граф обработки: обработка фидбека сотрудников (блокер, перенос срока, готовность, снятие блокера, неясный ответ)', () => {
   let ws = createWorkspace(NOW);
 
   // 1. Сотрудник сообщает о проблеме (блокер) по П-101
@@ -152,7 +152,7 @@ test('LangGraph Workflow: обработка фидбека сотруднико
   assert.ok(unclearRun.notifications.some(n => n.kind === 'clarify_followup' && n.to === 'elena'));
 });
 
-test('LangGraph Guardrails и уведомления сотрудникам о новых задачах и запросах статуса', () => {
+test('Проверки доступа и уведомления сотрудникам о новых задачах и запросах статуса', () => {
   let ws = createWorkspace(NOW);
 
   // Попытка чужого сотрудника изменить задачу П-102 (исполнитель elena, пишет dmitry)
@@ -171,18 +171,20 @@ test('LangGraph Guardrails и уведомления сотрудникам о �
   ws = added.state;
   assert.ok(ws.notifications.some(n => n.taskId === added.task.id && n.to === 'dmitry' && n.kind === 'task_assigned'));
 
-  // Запрос статуса у сотрудника через LangGraph
+  // Запрос статуса у сотрудника через граф
   const checkin = runAssistantWorkflow(ws, {
     eventType: 'check_in_request',
     actorId: 'manager',
     taskId: added.task.id,
     now: '2026-10-14T13:00:00+03:00'
   });
-  assert.equal(checkin.state.tasks.find(t => t.id === added.task.id).contact, 'awaiting');
+  assert.equal(checkin.state.tasks.find(t => t.id === added.task.id).contact, added.task.contact);
+  assert.equal(checkin.notifications[0].delivery, 'prepared');
+  assert.equal(checkin.state.tasks.find(t => t.id === added.task.id).lastRequestedAt, undefined);
   assert.ok(checkin.notifications.some(n => n.kind === 'check_in' && n.to === 'dmitry'));
 });
 
-test('UI: LangGraph Studio, семантический поиск Emb и интерактивный фидбек сотрудника в разделе Ассистент', async () => {
+test('UI: Панель обработки, семантический поиск Emb и интерактивный фидбек сотрудника в разделе Ассистент', async () => {
   const errors = [], virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', e => errors.push(e.message));
   const dom = new JSDOM(readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8'), {
@@ -201,7 +203,7 @@ test('UI: LangGraph Studio, семантический поиск Emb и инт�
 
   try {
     await import('../dist/app.js?langgraph-ui');
-    assert.ok(d.querySelector('.lg-studio'), 'Панель LangGraph Studio отображается в разделе Ассистент');
+    assert.ok(d.querySelector('.lg-studio'), 'Панель Панель обработки отображается в разделе Ассистент');
     assert.equal(d.querySelectorAll('.lg-node').length, 6, 'Отображаются все 6 узлов LangGraph');
     assert.ok(d.querySelectorAll('.emb-hit').length > 0, 'Отображаются результаты Emb-поиска');
 
@@ -216,6 +218,15 @@ test('UI: LangGraph Studio, семантический поиск Emb и инт�
     const saved = JSON.parse(w.localStorage.getItem('rut-assistant-demo-v02'));
     assert.equal(saved.tasks.find(t => t.id === 'П-101').status, 'blocked');
     assert.ok(saved.notifications.some(n => n.taskId === 'П-101' && n.kind === 'blocker_escalation'));
+    assert.equal(d.querySelector('.processing-details').open, false, 'Техническая трасса свёрнута');
+    d.querySelector('[data-action="task"][data-id="П-101"]').click();
+    d.querySelector('[data-action="memory"][data-id="П-101"]').click();
+    assert.match(d.querySelector('.memory-view').textContent, /Что известно и откуда/);
+    assert.match(d.querySelector('.memory-view').textContent, /нет сводной таблицы/);
+    assert.ok(d.querySelectorAll('.memory-source').length > 0);
+    assert.ok(d.querySelectorAll('.memory-links li').length > 0);
+    const sourceLink = d.querySelector('.memory-facts a');
+    assert.ok(sourceLink && d.getElementById(sourceLink.hash.slice(1)), 'Ссылка ведёт к исходному сообщению');
     assert.deepEqual(errors, []);
   } finally {
     intervals.forEach(clearInterval);

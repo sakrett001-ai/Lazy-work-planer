@@ -4,6 +4,7 @@ import { icon } from './icons.js';
 import { DASHBOARDS, INTERVALS, presentationPreferences, pinnedIds, togglePin, attentionSignal, isUnseen, acknowledgeSignal, snapshotTasks, taskUpdates, DashboardPlayer } from './attention.js';
 import { TIMEZONE, DAY, dayKey, shiftDay, shortDate, deadline, appearance, rankTask, scopeTasks, selectTasks, progress, createWorkspace, migrateWorkspace, proposal, makeDraft, addTask, editTask, changeTask, setPhase, savePhase, calendarDays, achievements, scenarioFor, applyScenario } from './workspace-model.js';
 import { EMBEDDING_DIM, GRAPH_NODE_META, semanticSearch, findSimilarTasks, runAssistantWorkflow } from './langgraph-emb.js';
+import { taskMemory } from './task-memory.js';
 
 const KEY = 'rut-assistant-demo-v02';
 const e = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
@@ -100,27 +101,27 @@ function archive() {
 function renderRail() {
   const tasks=selectTasks(state,{scope}), suggestions=tasks.filter(t=>rankTask(t)<=5).slice(0,3), ids=new Set(allScoped().map(t=>t.id));
   const events=state.events.filter(x=>ids.has(x.taskId)).slice(0,3), rewards=achievements(state), unlocked=rewards.filter(a=>a.value>=a.target).length;
-  const notifs=(state.notifications||[]).slice(0,2);
-  $('#assistant-rail').innerHTML=`<div class="assistant-heading"><span class="assistant-orb">${icon('spark')}</span><div><h2>Твой ассистент</h2><p>LangGraph · Emb ${EMBEDDING_DIM}d · связь с командой</p></div></div><div class="rail-presence"><i class="small-dot"></i><span>${document.visibilityState==='visible'?'Ты в приложении · эта вкладка активна':'Вкладка в фоне'}</span></div><div class="rail-label">СЛЕДУЮЩИЙ ШАГ <span>${suggestions.length}</span></div>${suggestions.length?suggestions.map(t=>{const p=proposal(t);return `<article class="suggestion"><div class="suggestion-task"><span>${e(t.id)} · ${e(person(t.employeeId).name)}</span>${icon('spark')}</div><h3>${e(p.title)}</h3><p>${e(p.detail)}</p><button class="button violet-button" data-action="draft" data-id="${e(t.id)}">${icon('pen')}Подготовить черновик</button><button class="source-link" data-action="task" data-id="${e(t.id)}">Посмотреть задачу и основание ↗</button></article>`;}).join(''):`<div class="suggestion"><h3>Можно заняться плановой работой</h3><p>По выбранным задачам сейчас нет срочных сигналов.</p><button class="button violet-button" data-action="view" data-view="chat">Обсудить следующий шаг</button></div>`}<div class="rail-separator"></div><button class="rail-chat" data-action="view" data-view="chat">${icon('message')}Открыть диалог и LangGraph ${icon('arrow')}</button><p class="rail-note">Черновики можно редактировать. Уведомления и фидбек сотрудников проходят через граф состояний.</p>${notifs.length?`<div class="rail-separator"></div><div class="rail-label">СИГНАЛЫ И УВЕДОМЛЕНИЯ <span>${(state.notifications||[]).length}</span></div>${notifs.map(n=>`<div class="rail-activity">${e(n.title)}<small>${e(n.recipientName)} · ${e(displayTime(n.at))}</small></div>`).join('')}`:''}<div class="rail-separator"></div><div class="rail-label">ПОСЛЕДНИЕ СОБЫТИЯ</div>${events.map(ev=>`<div class="rail-activity">${e(ev.text)}<small>${e(ev.taskId)} · ${e(displayTime(ev.at))}</small></div>`).join('')||'<p class="rail-note">Обновления появятся после действий с задачами.</p>'}${state.settings.achievements?`<div class="rail-separator"></div><button class="mini-achievement" data-action="achievements">${icon('trophy')}<span>${unlocked?'Есть чем гордиться':'Каждый финиш имеет значение'}<small>Открыто ${unlocked} из ${rewards.length} достижений</small></span></button>`:''}<button class="rail-simulation" data-action="simulate">${icon('play')}Проверить ответ сотрудника</button>`;
+  const notifs=(state.notifications||[]).filter(n=>ids.has(n.taskId)).slice(0,2);
+  $('#assistant-rail').innerHTML=`<div class="assistant-heading"><span class="assistant-orb">${icon('spark')}</span><div><h2>Твой ассистент</h2><p>Память · задачи · решения</p></div></div><div class="rail-presence"><i class="small-dot"></i><span>${document.visibilityState==='visible'?'Ты в приложении · эта вкладка активна':'Вкладка в фоне'}</span></div><div class="rail-label">СЛЕДУЮЩИЙ ШАГ <span>${suggestions.length}</span></div>${suggestions.length?suggestions.map(t=>{const p=proposal(t);return `<article class="suggestion"><div class="suggestion-task"><span>${e(t.id)} · ${e(person(t.employeeId).name)}</span>${icon('spark')}</div><h3>${e(p.title)}</h3><p>${e(p.detail)}</p><button class="button violet-button" data-action="draft" data-id="${e(t.id)}">${icon('pen')}Подготовить черновик</button><button class="source-link" data-action="task" data-id="${e(t.id)}">Посмотреть задачу и основание ↗</button></article>`;}).join(''):`<div class="suggestion"><h3>Можно заняться плановой работой</h3><p>По выбранным задачам сейчас нет срочных сигналов.</p><button class="button violet-button" data-action="view" data-view="chat">Обсудить следующий шаг</button></div>`}<div class="rail-separator"></div><button class="rail-chat" data-action="view" data-view="chat">${icon('message')}Открыть диалог ${icon('arrow')}</button><p class="rail-note">Черновики можно редактировать. Уведомления и фидбек сотрудников проходят через граф состояний.</p>${notifs.length?`<div class="rail-separator"></div><div class="rail-label">СИГНАЛЫ И УВЕДОМЛЕНИЯ <span>${(state.notifications||[]).length}</span></div>${notifs.map(n=>`<div class="rail-activity">${e(n.title)}<small>${e(n.recipientName)} · ${e(displayTime(n.at))}</small></div>`).join('')}`:''}<div class="rail-separator"></div><div class="rail-label">ПОСЛЕДНИЕ СОБЫТИЯ</div>${events.map(ev=>`<div class="rail-activity">${e(ev.text)}<small>${e(ev.taskId)} · ${e(displayTime(ev.at))}</small></div>`).join('')||'<p class="rail-note">Обновления появятся после действий с задачами.</p>'}${state.settings.achievements?`<div class="rail-separator"></div><button class="mini-achievement" data-action="achievements">${icon('trophy')}<span>${unlocked?'Есть чем гордиться':'Каждый финиш имеет значение'}<small>Открыто ${unlocked} из ${rewards.length} достижений</small></span></button>`:''}<button class="rail-simulation" data-action="simulate">${icon('play')}Проверить ответ сотрудника</button>`;
 }
 function renderLangGraphStudio(ids) {
-  const latestRun = (state.graphRuns || [])[0];
+  const latestRun = (state.graphRuns || []).find(run => !run.taskId || ids.has(run.taskId));
   const traceMap = new Map((latestRun?.trace || []).map(t => [t.node, t]));
   const embRes = semanticSearch(state, embQuery, { topK: 4, scopeIds: ids, minScore: 0.05 });
   const employees = state.employees.filter(p => p.id !== 'manager');
   const empTasks = state.tasks.filter(t => t.status !== 'done' && (feedbackEmployeeId === 'auto' || t.employeeId === feedbackEmployeeId));
-  const allNotifs = state.notifications || [];
+  const allNotifs = (state.notifications || []).filter(n => ids.has(n.taskId));
   const filteredNotifs = allNotifs.filter(n => notifFilter === 'manager' ? n.to === 'manager' : notifFilter === 'employees' ? n.to !== 'manager' : true).slice(0, 8);
 
-  return `<section class="lg-studio" aria-label="LangGraph и векторный мониторинг задач">
+  return `<section class="lg-studio" aria-label="Память и обработка задач">
     <div class="lg-grid">
-      <div class="panel lg-panel">
+      <details class="panel lg-panel processing-details"><summary>Как ассистент обработал сообщение</summary>
         <div class="section-heading">
           <div>
-            <h2>${icon('graph')} Конвейер LangGraph · Мониторинг и Guardrails</h2>
-            <p>Детерминированный StateGraph (6 узлов) для приёма фидбека сотрудников, Emb-поиска и маршрутизации уведомлений</p>
+            <h2>${icon('graph')} Как обработано сообщение</h2>
+            <p>Проверка автора, поиск контекста, разбор и сохранение с источником</p>
           </div>
-          <span class="status-pill mint">${icon('activity')}LangGraph_TaskMonitor_v1</span>
+          <span class="status-pill mint">${icon('activity')}Граф обработки</span>
         </div>
         <div class="lg-nodes">
           ${GRAPH_NODE_META.map(n => {
@@ -139,13 +140,13 @@ function renderLangGraphStudio(ids) {
           <div><strong>Последний запуск графа:</strong> <span>${e(latestRun.eventType)}</span> · ${e(latestRun.taskId || 'авто')} · ${e(displayTime(latestRun.at))}</div>
           ${latestRun.assistantReply ? `<p class="lg-trace-reply">${icon('spark')} ${e(latestRun.assistantReply)}</p>` : ''}
         </div>` : ''}
-      </div>
+      </details>
 
       <div class="panel lg-panel">
         <div class="section-heading">
           <div>
-            <h2>${icon('search')} Векторный поиск Emb (${EMBEDDING_DIM}d Cosine Similarity)</h2>
-            <p>Семантический индекс по задачам, сообщениям сотрудников, блокерам и черновикам решений</p>
+            <h2>${icon('search')} Поиск по задачам и сообщениям</h2>
+            <p>Найди похожую ситуацию и проверь исходные записи</p>
           </div>
           <span class="status-pill cyan">${embRes.totalIndexed || state.tasks.length} документов</span>
         </div>
@@ -160,7 +161,7 @@ function renderLangGraphStudio(ids) {
           ${embRes.results.length ? embRes.results.map(r => `<div class="emb-hit">
             <div class="emb-hit-head">
               <strong>${e(r.title)}</strong>
-              <span class="emb-score" title="Гибридная косинусная близость 64d">Emb score: ${e(r.score)}</span>
+              <span class="emb-score" title="Текстовое сходство, не вероятность и не достоверность">Сходство: ${e(r.score)}</span>
             </div>
             <p>${e(r.snippet)}</p>
             ${r.taskId ? `<button class="text-button" data-action="task" data-id="${e(r.taskId)}">Открыть ${e(r.taskId)} ${icon('upRight')}</button>` : ''}
@@ -174,9 +175,9 @@ function renderLangGraphStudio(ids) {
         <div class="section-heading">
           <div>
             <h2>${icon('people')} Взаимодействие ассистента с сотрудниками</h2>
-            <p>Приём фидбека о статусе или проблемах от сотрудников и отправка уведомлений о задачах</p>
+            <p>Проверь ответ сотрудника на вымышленных данных. Уведомления здесь только подготавливаются.</p>
           </div>
-          <span class="status-pill violet">Двусторонний контур</span>
+          <span class="status-pill violet">Симулятор диалога</span>
         </div>
         <form id="employee-feedback-form" class="feedback-form">
           <div class="form-grid" style="margin-top:10px">
@@ -185,9 +186,9 @@ function renderLangGraphStudio(ids) {
                 ${employees.map(p => `<option value="${e(p.id)}" ${p.id === feedbackEmployeeId ? 'selected' : ''}>${e(p.name)} (${e(p.role || p.team || 'отдел')})</option>`).join('')}
               </select>
             </label>
-            <label class="field">Задача (или автопоиск Emb)
+            <label class="field">Задача
               <select id="feedback-task" name="taskId">
-                <option value="">Автоопределение по смыслу (Emb 64d)</option>
+                <option value="">Определить по одному явно указанному ID</option>
                 ${empTasks.map(t => `<option value="${e(t.id)}" ${t.id === feedbackTaskId ? 'selected' : ''}>${e(t.id)} · ${e(t.title)}</option>`).join('')}
               </select>
             </label>
@@ -202,9 +203,9 @@ function renderLangGraphStudio(ids) {
             <button type="button" data-action="feedback-preset" data-kind="unblocked" data-text="Данные получены, препятствие устранено, продолжаем работу по плану.">Препятствие снято</button>
           </div>
           <div class="detail-actions">
-            <button class="button primary" type="submit">${icon('send')}Обработать фидбек через LangGraph</button>
-            <button class="button ghost" type="button" data-action="notify-employee-checkin">${icon('bell')}Запросить статус у сотрудника</button>
-            <button class="button ghost" type="button" data-action="notify-employee-assigned">${icon('spark')}Уведомить о поступившей задаче</button>
+            <button class="button primary" type="submit">${icon('send')}Обработать пример ответа</button>
+            <button class="button ghost" type="button" data-action="notify-employee-checkin">${icon('bell')}Подготовить запрос статуса</button>
+            <button class="button ghost" type="button" data-action="notify-employee-assigned">${icon('spark')}Подготовить уведомление</button>
           </div>
         </form>
       </div>
@@ -225,7 +226,7 @@ function renderLangGraphStudio(ids) {
               <span class="status-pill">${icon(n.to === 'manager' ? 'alert' : 'bell')}${e(n.to === 'manager' ? 'Эскалация руководителю' : `Уведомление: ${n.recipientName}`)}</span>
               <small class="muted">${e(displayTime(n.at))}</small>
             </div>
-            <strong>${e(n.title)}</strong>
+            <strong>${e(n.title)}</strong><small class="delivery-state">${e(({prepared:"Подготовлено · не отправлено",draft:"Черновик · не отправлено",sent:"Отправлено",failed:"Ошибка отправки",uncertain:"Результат отправки неизвестен",unverified:"Доставка не подтверждена"})[n.delivery] || "Доставка не подтверждена")}</small>
             <p>${e(n.text)}</p>
             ${n.taskId ? `<button class="text-button" data-action="task" data-id="${e(n.taskId)}">Задача ${e(n.taskId)} ${icon('upRight')}</button>` : ''}
           </div>`).join('') : '<p class="view-note">Уведомлений в выбранном фильтре пока нет.</p>'}
@@ -236,7 +237,7 @@ function renderLangGraphStudio(ids) {
 }
 function chat() {
   const ids=new Set(allScoped().map(t=>t.id)), messages=(state.chat||[]).filter(m=>m.scope===scope).slice(-30), drafts=Object.entries(state.drafts||{}).filter(([,d])=>ids.has(d.taskId));
-  return `<section class="chat-panel"><div class="chat-header"><span class="assistant-orb">${icon('spark')}</span><div><h2>Мозг и совесть твоей доски</h2><p>Агент-ассистент с LangGraph-конвейером, векторным поиском Emb (${EMBEDDING_DIM}d) и связью с командой</p></div></div><div class="chat-messages" id="chat-messages" aria-live="polite"><div class="chat-bubble">Помогу выбрать следующий шаг, принять фидбек от сотрудников, уведомить команду о новых поручениях или найти похожие задачи через векторные эмбеддинги.<small>Область: ${scope==='mine'?'мои задачи':scope==='department'?'плановый отдел':'управление'}. Все данные в этой версии — демонстрационные.</small></div>${messages.map(m=>`<div class="chat-bubble ${m.role==='user'?'user':''}">${e(m.text)}${m.tasks?.length?`<div class="chat-task-links">${m.tasks.filter(id=>ids.has(id)).map(id=>`<button data-action="task" data-id="${e(id)}">${e(id)} · открыть</button>`).join('')}</div>`:''}${m.role==='assistant'?'<small>Ответ агента · LangGraph + Emb 64d</small>':''}</div>`).join('')}</div><div class="chat-prompts">${['Что требует моего решения?','Какие сроки горят?','Подготовь следующий шаг','Найди по смыслу задачи про ФОТ и бюджет'].map(t=>`<button data-action="prompt" data-text="${e(t)}">${e(t)}</button>`).join('')}</div><form class="chat-form" id="chat-form"><label class="sr-only" for="chat-input">Сообщение ассистенту</label><input id="chat-input" name="message" autocomplete="off" maxlength="1000" placeholder="Например: что делать по П-102? или семантический поиск по проблемам…" required><button class="button primary" type="submit" aria-label="Отправить в демонстрационный чат">${icon('send')}</button></form></section><p class="chat-note">Демонстрация распознаёт запросы о статусах, сроках, задачах по ID и выполняет векторный поиск Emb (64d). Ниже можно протестировать живой приём фидбека от сотрудников и отправку им уведомлений через граф состояний LangGraph.</p>${renderLangGraphStudio(ids)}<div class="chat-saved-drafts"><div class="section-heading"><h2>Черновики решений</h2><span class="muted">${drafts.length}</span></div>${drafts.map(([key,d])=>`<button class="draft-list-item" data-action="draft" data-id="${e(d.taskId)}" data-type="${e(d.type)}"><span>${icon('document')} ${e(d.title)}<small class="muted"> · ${e(d.taskId)}</small></span>${icon('upRight')}</button>`).join('')||'<p class="view-note">Подготовь и сохрани черновик из карточки — он появится здесь.</p>'}</div><div class="detail-actions"><button class="button ghost" data-action="simulate">${icon('play')}Проверить сценарий ответа сотрудника</button></div>`;
+  return `<section class="chat-panel"><div class="chat-header"><span class="assistant-orb">${icon('spark')}</span><div><h2>Мозг и совесть твоей доски</h2><p>Контекст задачи, исходные сообщения и решения в одном месте</p></div></div><div class="chat-messages" id="chat-messages" aria-live="polite"><div class="chat-bubble">Помогу выбрать следующий шаг, найти исходное сообщение и подготовить решение. Ниже можно проверить пример ответа сотрудника.<small>Область: ${scope==='mine'?'мои задачи':scope==='department'?'плановый отдел':'управление'}. Все данные в этой версии — демонстрационные.</small></div>${messages.map(m=>`<div class="chat-bubble ${m.role==='user'?'user':''}">${e(m.text)}${m.tasks?.length?`<div class="chat-task-links">${m.tasks.filter(id=>ids.has(id)).map(id=>`<button data-action="task" data-id="${e(id)}">${e(id)} · открыть</button>`).join('')}</div>`:''}${m.role==='assistant'?'<small>Ответ демонстрации · по сохранённым данным</small>':''}</div>`).join('')}</div><div class="chat-prompts">${['Что требует моего решения?','Какие сроки горят?','Подготовь следующий шаг','Найди по смыслу задачи про ФОТ и бюджет'].map(t=>`<button data-action="prompt" data-text="${e(t)}">${e(t)}</button>`).join('')}</div><form class="chat-form" id="chat-form"><label class="sr-only" for="chat-input">Сообщение ассистенту</label><input id="chat-input" name="message" autocomplete="off" maxlength="1000" placeholder="Например: что делать по П-102? или семантический поиск по проблемам…" required><button class="button primary" type="submit" aria-label="Отправить в демонстрационный чат">${icon('send')}</button></form></section><p class="chat-note">Демонстрация показывает статусы, сроки, историю и поиск похожих записей. Ниже можно проверить пример диалога. Мессенджеры к этому интерфейсу не подключены.</p>${renderLangGraphStudio(ids)}<div class="chat-saved-drafts"><div class="section-heading"><h2>Черновики решений</h2><span class="muted">${drafts.length}</span></div>${drafts.map(([key,d])=>`<button class="draft-list-item" data-action="draft" data-id="${e(d.taskId)}" data-type="${e(d.type)}"><span>${icon('document')} ${e(d.title)}<small class="muted"> · ${e(d.taskId)}</small></span>${icon('upRight')}</button>`).join('')||'<p class="view-note">Подготовь и сохрани черновик из карточки — он появится здесь.</p>'}</div><div class="detail-actions"><button class="button ghost" data-action="simulate">${icon('play')}Проверить сценарий ответа сотрудника</button></div>`;
 }
 function settings() {
   return `<div class="settings-grid">${presentationSettings()}<section class="panel"><h2>Чтобы было приятно работать</h2><div style="margin-top:20px"><div class="setting-row"><div><h3>Движение интерфейса</h3><p>Плавное появление и перестановка карточек. Системная настройка уменьшения движения всегда учитывается.</p></div><button class="toggle ${state.settings.motion?'on':''}" role="switch" aria-checked="${!!state.settings.motion}" data-action="motion" aria-label="Движение интерфейса"></button></div><div class="setting-row"><div><h3>Личные достижения</h3><p>Небольшие отметки за принятые результаты и полезные действия. Без рейтинга сотрудников.</p></div><button class="toggle ${state.settings.achievements?'on':''}" role="switch" aria-checked="${!!state.settings.achievements}" data-action="toggle-achievements" aria-label="Личные достижения"></button></div><div class="setting-row"><div><h3>Архив после принятия</h3><p>Принятая задача уходит с доски, сохраняя историю. Возврат в работу доступен из архива.</p></div><span class="status-pill mint">${icon('check')}Включён</span></div></div></section><section class="panel"><h2>Разговор продолжается там, где удобно</h2><p class="view-note">Предлагаемый маршрут: если человек активен в приложении — писать в чат; если недоступен — в выбранный мессенджер. Одно сообщение должно иметь одну историю доставки.</p><div class="connection-grid"><div class="connection-card">${icon('message')}Чат приложения<small>Локальная демонстрация</small></div><div class="connection-card">${icon('send')}Telegram<small>Не подключён</small></div><div class="connection-card">${icon('message')}MAX<small>Не подключён</small></div></div><p class="settings-footnote">Сейчас определяется только активность этой вкладки. Присутствие сотрудников, общая переписка и уведомления появятся при подключении рабочего сервера.</p></section><section class="panel"><h2>Личное, отдел, управление</h2><table class="permission-table"><thead><tr><th>Область</th><th>Задуманное представление</th></tr></thead><tbody><tr><td>Мои задачи</td><td>Назначенные конкретному сотруднику</td></tr><tr><td>Отдел</td><td>Задачи сотрудников своего отдела</td></tr><tr><td>Управление</td><td>Общая картина и вопросы руководителю</td></tr></tbody></table><p class="settings-footnote">Переключатель в демонстрации фильтрует карточки. Реальные права доступа ещё не подключены; их нужно назначать участникам на сервере.</p></section><section class="panel"><h2>Примеры и состояние</h2><p class="view-note">Данные хранятся в этом браузере. Это демонстрация, поэтому не используй её как единственное хранилище реальных поручений.</p><div class="detail-actions"><button class="button ghost" data-action="simulate">${icon('play')}Проверить сценарий</button><button class="button ghost" data-action="achievements">${icon('trophy')}Достижения</button><button class="button danger" data-action="reset-confirm">${icon('refresh')}Начать демо заново</button></div></section></div>`;
@@ -258,10 +259,20 @@ function go(next, automatic = false) {
 }
 function showModal(content, className = '') { $('#modal-content').innerHTML=content;modal.className=className;fillIcons(modal);if(!modal.open)modal.showModal();modal.scrollTop=0;const target=modal.querySelector('[autofocus]')||modal.querySelector('#modal-title');if(target){if(target.tagName==='H2')target.tabIndex=-1;target.focus({preventScroll:true});} }
 function closeModal() { lastInteraction=Date.now();modal.close();draftType=null;activeTaskId=null;renderRail();if(view==='chat')render(); }
+function memoryDialog(id, before = null) {
+  const memory = taskMemory(state, person('manager'), id, { before, limit: 20 });
+  const labels = { status:'Состояние', summary:'Последний содержательный ответ', blocker:'Препятствие', due:'Утверждённый срок', proposedDue:'Предлагаемый срок', needsDecision:'Нужно решение', nextAction:'Следующий шаг' };
+  const statuses = { planned:'Запланировано', active:'В работе', blocked:'Есть препятствие', review:'На проверке', done:'Принято' };
+  const sources = new Map(memory.sources.map(source => [source.id, source]));
+  const graphLabels = new Map(memory.graph.nodes.map(n => [n.id, n.title || n.name || n.text || n.eventId || n.id]));
+  const relations = { assigned_to:'Исполнитель', required_by:'Основание', part_of:'Проект', step_of:'Этап задачи', depends_on:'Зависит от', reports_on:'Сообщение о задаче', recorded_for:'Событие задачи', history_only:'Историческая запись', supported_by:'Подтверждается источником', context_from:'Контекст черновика', proposes:'Черновик предложения' };
+  const value = fact => typeof fact.value === 'boolean' ? (fact.value ? 'Да' : 'Нет') : fact.field === 'status' ? (statuses[fact.value] || fact.value) : fact.value;
+  showModal(`<div class="modal-body memory-view"><div class="modal-kicker">${e(id)} · Память задачи</div><h2 id="modal-title">Что известно и откуда</h2><p class="view-note">История этой демонстрации сохраняется в браузере. Сообщения, решения и черновики учитываются отдельно.</p><div class="memory-facts">${memory.facts.filter(f => f.value !== null && f.value !== '').map(f => `<article><small>${e(labels[f.field])}</small><p>${e(value(f))}</p>${f.origin.sourceId && sources.has(f.origin.sourceId) ? `<a href="#memory-source-${memory.sources.findIndex(source => source.id === f.origin.sourceId)}">Исходное сообщение</a>` : f.origin.eventId ? '<small>Основание: событие в истории задачи</small>' : '<small>Из карточки задачи · отдельный источник не указан</small>'}</article>`).join('')}</div>${memory.openQuestions.length ? `<div class="memory-questions"><h3>Остаётся открытым</h3><ul>${memory.openQuestions.map(q => `<li>${e(q)}</li>`).join('')}</ul></div>` : ''}<h3>Решения руководителя</h3>${memory.recentDecisions.map(event => `<div class="history-item">${e(event.text)}<small>${e(displayTime(event.at))}</small></div>`).join('') || '<p class="view-note">Решения пока не зафиксированы.</p>'}<h3>Черновики · решения ещё не приняты</h3>${memory.drafts.map(draft => `<details class="memory-source"><summary>${e(draft.title)}</summary><blockquote>${e(draft.body)}</blockquote></details>`).join('') || '<p class="view-note">Сохранённых черновиков нет.</p>'}<h3>Исходные сообщения</h3>${memory.sources.map((source, index) => `<details class="memory-source" id="memory-source-${index}"><summary>${e(person(source.employeeId).name)} · ${e(displayTime(source.occurredAt))}</summary><blockquote>${e(source.text)}</blockquote><small>${e(source.id)}</small></details>`).join('') || '<p class="view-note">Для этих записей исходных сообщений пока нет.</p>'}<h3>История · ${memory.page.total} событий</h3><div class="history-list">${memory.timeline.map(event => `<div class="history-item">${e(event.text)}<small>${e(displayTime(event.at))}${event.kind === 'late_report' ? ' · статус не изменялся' : ''}</small></div>`).join('') || '<p class="view-note">История появится после действий с задачей.</p>'}</div><div class="detail-actions">${memory.page.nextBefore ? `<button class="button ghost" data-action="memory-page" data-id="${e(id)}" data-before="${e(memory.page.nextBefore)}">Более ранние события</button>` : ''}${before ? `<button class="button ghost" data-action="memory" data-id="${e(id)}">К свежим событиям</button>` : ''}</div><details class="memory-links"><summary>Связи записей · ${memory.graph.edges.length}</summary><ul>${memory.graph.edges.map(link => `<li><strong>${e(relations[link.relation] || link.relation)}</strong><span>${e(String(graphLabels.get(link.from)).slice(0, 100))}</span><span>${e(String(graphLabels.get(link.to)).slice(0, 100))}</span></li>`).join('')}</ul></details><div class="detail-actions"><button class="button primary" data-action="task" data-id="${e(id)}">Вернуться к карточке</button></div></div>`);
+}
 function taskDetail(id) {
   const task=findTask(id);if(!task)return;activeTaskId=id;draftType=null;
   const a=appearance(task), timer=deadline(task), source=sourceFor(task), p=proposal(task), phase=progress(task), events=state.events.filter(ev=>ev.taskId===id).slice(0,12);
-  const similar=findSimilarTasks(state,id,3);
+  const similar=findSimilarTasks(state,id,3,new Set(allScoped().map(t=>t.id)));
   const actions=[];
   if(task.status==='planned')actions.push(['start','Начать работу','primary']);
   if(task.status==='active')actions.push(['review','Передать на проверку','primary']);
@@ -270,7 +281,7 @@ function taskDetail(id) {
   if(task.proposedDue)actions.push(['approve_due','Согласовать '+shortDate(task.proposedDue),'primary'],['reject_due','Сохранить текущий срок','ghost']);
   if(task.needsDecision&&task.status==='blocked'&&!task.proposedDue)actions.push(['take_control','Взять вопрос в работу','ghost']);
   if(task.status==='done')actions.push(['reopen','Вернуть в работу','ghost']);
-  showModal(`<div class="modal-body"><div class="modal-kicker">${e(task.id)} / ${e(task.project||'Поручение')}</div><h2 id="modal-title">${e(task.title)}</h2><div class="detail-meta"><span class="status-pill ${a.color}">${icon(a.icon)}${a.label}</span><span class="owner">${avatar(task.employeeId)}${e(person(task.employeeId).name)}</span>${task.needsDecision?'<span class="status-pill amber">Нужно твоё решение</span>':''}</div><p class="detail-summary">${e(task.summary||'Описание результата пока не добавлено.')}</p>${task.protocol?`<div class="detail-protocol">${protocolLine(task)}</div>`:''}<div class="detail-due"><span>Утверждённый срок<strong>${task.due?shortDate(task.due,true)+' · '+e(task.dueTime||'18:00')+' МСК':'Не задан'}</strong>${task.proposedDue?`<span class="muted">Предложен: ${shortDate(task.proposedDue,true)}</span>`:''}</span><span class="countdown ${timer.kind}" data-detail-countdown="${e(task.id)}">${timer.text}</span></div><div class="proposal-box"><h3>${icon('spark')}${e(p.title)}</h3><p>${e(p.detail)}</p>${p.alternatives.length?`<div class="proposal-options">${p.alternatives.map(x=>`<span>${e(x)}</span>`).join('')}</div>`:''}<div class="detail-actions" style="margin-top:8px"><button class="button violet-button" data-action="draft" data-id="${e(id)}">${icon('pen')}Подготовить черновик</button>${task.status!=='done'&&task.employeeId!=='manager'?`<button class="button small ghost" data-action="quick-checkin" data-id="${e(id)}">${icon('bell')}Запросить статус у ${e(person(task.employeeId).name)}</button><button class="button small ghost" data-action="quick-notify" data-id="${e(id)}">${icon('send')}Уведомить исполнителя</button>`:''}</div><p style="font-size:9px;margin-bottom:0">Предложение по правилам демонстрации + LangGraph & Emb (${EMBEDDING_DIM}d).</p></div><div class="detail-actions">${task.status!=='done'?cardControls(task,true):''}${actions.map(([act,label,style])=>`<button class="button ${style}" data-action="task-change" data-change="${act}" data-id="${e(id)}">${act==='accept'?icon('check'):''}${e(label)}</button>`).join('')}${task.status!=='done'?`<button class="button ghost" data-action="edit-task" data-id="${e(id)}">${icon('pen')}Изменить</button>`:''}</div><div class="detail-section"><h3>Этапы ${phase.total?`· ${phase.done} / ${phase.total}`:''}</h3>${phase.total?phaseList(task):'<p class="view-note">Простую задачу можно вести без этапов.</p>'}<div class="detail-actions">${phase.total?`<button class="button small ghost" data-action="timeline-task" data-id="${e(id)}">${icon('timeline')}Открыть Гант</button>`:''}${task.status!=='done'?`<button class="button small ghost" data-action="phase-add" data-id="${e(id)}">${icon('plus')}Добавить этап</button>`:''}</div>${task.due&&task.phases?.some(ph=>ph.end>task.due)?'<p class="view-note" style="color:var(--amber)">Некоторые этапы выходят за общий срок. Согласуй даты отдельно.</p>':''}</div>${similar.length?`<div class="detail-section"><h3>Похожие задачи (векторный индекс Emb ${EMBEDDING_DIM}d)</h3><div class="emb-results">${similar.map(s=>`<div class="emb-hit"><div class="emb-hit-head"><strong>${e(s.title)}</strong><span class="emb-score">Emb: ${e(s.score)}</span></div><p>${e(s.snippet)}</p><button class="text-button" data-action="task" data-id="${e(s.taskId)}">Перейти к ${e(s.taskId)} ${icon('upRight')}</button></div>`).join('')}</div></div>`:''}<div class="detail-section"><h3>Последнее исходное сообщение</h3>${source?`<div class="source-quote">${e(source.text)}</div><div class="source-meta">${e(person(source.employeeId).name)} · ${e(displayTime(source.receivedAt))} · демонстрационный источник</div>`:'<p class="view-note">Сообщения сотрудника пока нет. Описание задачи задано в демонстрации или руководителем.</p>'}</div><div class="detail-section"><h3>История</h3><div class="history-list">${events.map(ev=>`<div class="history-item">${e(ev.text)}<small>${e(displayTime(ev.at))}</small></div>`).join('')||'<p class="view-note">Новых событий пока нет.</p>'}</div></div></div>`);
+  showModal(`<div class="modal-body"><div class="modal-kicker">${e(task.id)} / ${e(task.project||'Поручение')}</div><h2 id="modal-title">${e(task.title)}</h2><div class="detail-meta"><span class="status-pill ${a.color}">${icon(a.icon)}${a.label}</span><span class="owner">${avatar(task.employeeId)}${e(person(task.employeeId).name)}</span>${task.needsDecision?'<span class="status-pill amber">Нужно твоё решение</span>':''}</div><p class="detail-summary">${e(task.summary||'Описание результата пока не добавлено.')}</p>${task.protocol?`<div class="detail-protocol">${protocolLine(task)}</div>`:''}<div class="detail-due"><span>Утверждённый срок<strong>${task.due?shortDate(task.due,true)+' · '+e(task.dueTime||'18:00')+' МСК':'Не задан'}</strong>${task.proposedDue?`<span class="muted">Предложен: ${shortDate(task.proposedDue,true)}</span>`:''}</span><span class="countdown ${timer.kind}" data-detail-countdown="${e(task.id)}">${timer.text}</span></div><div class="proposal-box"><h3>${icon('spark')}${e(p.title)}</h3><p>${e(p.detail)}</p>${p.alternatives.length?`<div class="proposal-options">${p.alternatives.map(x=>`<span>${e(x)}</span>`).join('')}</div>`:''}<div class="detail-actions" style="margin-top:8px"><button class="button violet-button" data-action="draft" data-id="${e(id)}">${icon('pen')}Подготовить черновик</button>${task.status!=='done'&&task.employeeId!=='manager'?`<button class="button small ghost" data-action="quick-checkin" data-id="${e(id)}">${icon('bell')}Подготовить запрос статуса</button><button class="button small ghost" data-action="quick-notify" data-id="${e(id)}">${icon('send')}Подготовить уведомление</button>`:''}</div><p style="font-size:9px;margin-bottom:0">Предложение по правилам демонстрации. Проверь основания в памяти задачи.</p></div><div class="detail-actions">${task.status!=='done'?cardControls(task,true):''}${actions.map(([act,label,style])=>`<button class="button ${style}" data-action="task-change" data-change="${act}" data-id="${e(id)}">${act==='accept'?icon('check'):''}${e(label)}</button>`).join('')}${task.status!=='done'?`<button class="button ghost" data-action="edit-task" data-id="${e(id)}">${icon('pen')}Изменить</button>`:''}</div><div class="detail-section"><h3>Этапы ${phase.total?`· ${phase.done} / ${phase.total}`:''}</h3>${phase.total?phaseList(task):'<p class="view-note">Простую задачу можно вести без этапов.</p>'}<div class="detail-actions">${phase.total?`<button class="button small ghost" data-action="timeline-task" data-id="${e(id)}">${icon('timeline')}Открыть Гант</button>`:''}${task.status!=='done'?`<button class="button small ghost" data-action="phase-add" data-id="${e(id)}">${icon('plus')}Добавить этап</button>`:''}</div>${task.due&&task.phases?.some(ph=>ph.end>task.due)?'<p class="view-note" style="color:var(--amber)">Некоторые этапы выходят за общий срок. Согласуй даты отдельно.</p>':''}</div>${similar.length?`<div class="detail-section"><h3>Похожие задачи · проверь контекст</h3><div class="emb-results">${similar.map(s=>`<div class="emb-hit"><div class="emb-hit-head"><strong>${e(s.title)}</strong><span class="emb-score">Сходство: ${e(s.score)}</span></div><p>${e(s.snippet)}</p><button class="text-button" data-action="task" data-id="${e(s.taskId)}">Перейти к ${e(s.taskId)} ${icon('upRight')}</button></div>`).join('')}</div></div>`:''}<div class="detail-section"><button class="button violet-button" data-action="memory" data-id="${e(id)}">${icon('graph')}Память и связи задачи</button></div><div class="detail-section"><h3>Последнее исходное сообщение</h3>${source?`<div class="source-quote">${e(source.text)}</div><div class="source-meta">${e(person(source.employeeId).name)} · ${e(displayTime(source.receivedAt))} · демонстрационный источник</div>`:'<p class="view-note">Сообщения сотрудника пока нет. Описание задачи задано в демонстрации или руководителем.</p>'}</div><div class="detail-section"><h3>История</h3><div class="history-list">${events.map(ev=>`<div class="history-item">${e(ev.text)}<small>${e(displayTime(ev.at))}</small></div>`).join('')||'<p class="view-note">Новых событий пока нет.</p>'}</div></div></div>`);
 }
 function draftDialog(id, type) {
   const task=findTask(id);if(!task)return;activeTaskId=id;draftType=type||proposal(task).type;
@@ -324,15 +335,15 @@ function mutateTask(id, action) {
 function chatReply(text) {
  const tasks=selectTasks(state,{scope}), normalized=text.toLocaleLowerCase('ru-RU'), matches=mentionedTaskIds(text.toUpperCase(),allScoped());
  let reply, ids=[];
- if(matches.length){const task=findTask(matches[0]),p=proposal(task),sim=findSimilarTasks(state,task.id,2);reply=`${task.id} · ${task.title}\n\nЗафиксировано: ${task.summary||'Описание результата пока не задано.'}\n\nСледующий шаг: ${p.title.toLocaleLowerCase('ru-RU')}. ${p.detail}${sim.length?`\n\nПохожие по Emb (${EMBEDDING_DIM}d): ${sim.map(s=>`${s.taskId} (${s.score})`).join(', ')}.`:''}\n\nВ карточке можно открыть исходное сообщение и подготовить редактируемый черновик.`;ids=[task.id];}
+ if(matches.length){const task=findTask(matches[0]),p=proposal(task),sim=findSimilarTasks(state,task.id,2,new Set(allScoped().map(t=>t.id)));reply=`${task.id} · ${task.title}\n\nЗафиксировано: ${task.summary||'Описание результата пока не задано.'}\n\nСледующий шаг: ${p.title.toLocaleLowerCase('ru-RU')}. ${p.detail}${sim.length?`\n\nПохожие задачи: ${sim.map(s=>`${s.taskId} (${s.score})`).join(', ')}.`:''}\n\nВ карточке можно открыть исходное сообщение и подготовить редактируемый черновик.`;ids=[task.id];}
  else if(/срок|горят|просроч|календар/.test(normalized)){const urgent=tasks.filter(t=>['overdue','soon'].includes(deadline(t).kind));ids=urgent.map(t=>t.id);reply=urgent.length?`По текущим срокам требуют внимания:\n\n${urgent.map(t=>`${t.id}: ${t.title}. ${deadline(t).text}.`).join('\n\n')}\n\nПеренос срока нужно согласовать отдельно.`:'В выбранной области нет просроченных задач и сроков в ближайшие 24 часа. Остальные даты видны в календаре.';}
  else if(/решени|вниман|сводк|статус|что делать|следующ|помо/.test(normalized)){const attention=tasks.filter(t=>rankTask(t)<=5).slice(0,5);ids=attention.map(t=>t.id);reply=attention.length?`Вот где можно продвинуть работу:\n\n${attention.map(t=>`${t.id} · ${proposal(t).title}.\n${t.summary||'Статус нужно уточнить.'}`).join('\n\n')}\n\nОткрой задачу, чтобы проверить основание и подготовить действие.`:'Сейчас нет сигналов, требующих срочного вмешательства. Можно продолжить плановые задачи или уточнить ближайшие этапы.';}
  else {
-  const wf=runAssistantWorkflow(state,{eventType:'manager_query',actorId:'manager',message:text,now:now().toISOString()});
+  const wf=runAssistantWorkflow(state,{eventType:'manager_query',actorId:'manager',readScopeIds:new Set(allScoped().map(t=>t.id)),message:text,now:now().toISOString()});
   state=wf.state;
   const matchedTasks=(wf.embContext?.topMatches||[]).filter(m=>m.taskId).map(m=>m.taskId);
   ids=[...new Set(matchedTasks)];
-  reply=ids.length?wf.reply:'В этой демонстрации я могу собрать сводку, выполнить семантический поиск Emb (64d), показать срочные задачи и предложить следующий шаг по ID поручения. Например: «Что требует моего решения?» или «Что делать по П-102?».';
+  reply=ids.length?wf.reply:'В этой демонстрации я могу собрать сводку, найти похожие записи, показать срочные задачи и предложить следующий шаг по ID поручения. Например: «Что требует моего решения?» или «Что делать по П-102?».';
  }
  state.chat ||= [];state.chat.push({role:'user',scope,text,at:now().toISOString()},{role:'assistant',scope,text:reply,tasks:ids,at:now().toISOString()});state.chat=state.chat.slice(-100);persist();render();$('#chat-input')?.focus();
 }
@@ -456,6 +467,8 @@ document.addEventListener('click', async event => {
   case 'simulate-next':{const sc=scenarioFor(simKey,state);if(simStep<sc.messages.length){if(simStep+1===sc.messages.length){state=applyScenario(state,simKey);persist();simApplied=true;render(true);}simStep++;}simulationDialog();break;}
   case 'simulation-board':modal.close();scope='management';filter='all';search='';$('#search').value='';go('board');requestAnimationFrame(()=>{const el=[...document.querySelectorAll('[data-card-id]')].find(x=>x.dataset.cardId===id);el?.scrollIntoView({block:'center',behavior:motionAllowed()?'smooth':'auto'});if(el&&motionAllowed())el.animate([{boxShadow:'0 0 0 2px #d7c5ff'},{boxShadow:'0 0 0 8px transparent'}],{duration:1400});});break;
   case 'prompt':chatReply(button.dataset.text);break;
+  case 'memory':memoryDialog(id);break;
+  case 'memory-page':memoryDialog(id,button.dataset.before);break;
   case 'emb-preset':embQuery=button.dataset.query||'';render();break;
   case 'notif-filter':notifFilter=button.dataset.filter||'all';render();break;
   case 'feedback-preset':{const box=$('#feedback-message');if(box){box.value=button.dataset.text||'';box.focus();}break;}
@@ -464,22 +477,22 @@ document.addEventListener('click', async event => {
    const tId=$('#feedback-task')?.value||state.tasks.find(t=>t.employeeId===empId&&t.status!=='done')?.id;
    if(!tId){toast('Выбери открытую задачу для запроса статуса');break;}
    const wf=runAssistantWorkflow(state,{eventType:'check_in_request',actorId:'manager',taskId:tId,now:now().toISOString()});
-   state=wf.state;persist();render(true);toast(`Запрос статуса отправлен исполнителю по задаче ${tId}`);break;
+   state=wf.state;persist();render(true);toast(`Запрос статуса по ${tId} подготовлен. Отправки нет.`);break;
   }
   case 'notify-employee-assigned':{
    const empId=$('#feedback-employee')?.value||feedbackEmployeeId;
    const tId=$('#feedback-task')?.value||state.tasks.find(t=>t.employeeId===empId&&t.status!=='done')?.id;
    if(!tId){toast('Выбери задачу для уведомления исполнителя');break;}
    const wf=runAssistantWorkflow(state,{eventType:'task_assigned',actorId:'manager',taskId:tId,now:now().toISOString()});
-   state=wf.state;persist();render(true);toast(`Исполнитель уведомлён о поручении ${tId}`);break;
+   state=wf.state;persist();render(true);toast(`Уведомление о ${tId} подготовлено. Отправки нет.`);break;
   }
   case 'quick-checkin':{
    const wf=runAssistantWorkflow(state,{eventType:'check_in_request',actorId:'manager',taskId:id,now:now().toISOString()});
-   state=wf.state;persist();render(true);if(modal.open)taskDetail(id);toast(`Ассистент отправил запрос статуса по ${id}`);break;
+   state=wf.state;persist();render(true);if(modal.open)taskDetail(id);toast(`Запрос статуса по ${id} подготовлен. Отправки нет.`);break;
   }
   case 'quick-notify':{
    const wf=runAssistantWorkflow(state,{eventType:'task_assigned',actorId:'manager',taskId:id,now:now().toISOString()});
-   state=wf.state;persist();render(true);if(modal.open)taskDetail(id);toast(`Исполнителю отправлено уведомление о задаче ${id}`);break;
+   state=wf.state;persist();render(true);if(modal.open)taskDetail(id);toast(`Уведомление о ${id} подготовлено. Отправки нет.`);break;
   }
   case 'reset-confirm':showModal(`<div class="modal-body reset-panel">${icon('refresh')}<h2 id="modal-title">Начать демонстрацию заново?</h2><p>Локальные задачи, изменения, диалоги и черновики этой демонстрации будут заменены исходными примерами с актуальными датами.</p><div class="detail-actions" style="justify-content:center"><button class="button ghost" data-action="close">Сохранить мою работу</button><button class="button danger" data-action="reset">Начать заново</button></div></div>`);break;
   case 'reset':state=createWorkspace();player.stop();player.clear();observedTasks=snapshotTasks(state.tasks);persist();modal.close();scope='management';search='';$('#search').value='';filter='all';month=dayKey().slice(0,7);go('board');toast('Демонстрация начата заново. Сроки привязаны к сегодняшнему дню.');break;
@@ -498,7 +511,7 @@ document.addEventListener('submit', event => {
   const id=form.dataset.id;state=savePhase(state,id,form.dataset.phase||null,data);persist();render(true);taskDetail(id);toast('Этап сохранён. Общий срок задачи остался прежним.');
  }else if(form.id==='chat-form'&&data.message.trim())chatReply(data.message.trim());
  else if(form.id==='emb-search-form'){
-  embQuery=(data.query||'').trim();render();toast(`Векторный поиск Emb (${EMBEDDING_DIM}d) выполнен.`);
+  embQuery=(data.query||'').trim();render();toast(`Поиск по записям выполнен.`);
  }else if(form.id==='employee-feedback-form'){
   const actorId=data.employeeId||feedbackEmployeeId;
   const taskId=data.taskId||null;
@@ -507,7 +520,7 @@ document.addEventListener('submit', event => {
   feedbackEmployeeId=actorId;feedbackTaskId=taskId||'';
   const wf=runAssistantWorkflow(state,{eventType:'employee_feedback',actorId,taskId,message,now:now().toISOString()});
   state=wf.state;persist();render(true);
-  toast(wf.reply||'Фидбек сотрудника обработан через LangGraph.');
+  toast(wf.reply||'Пример ответа обработан.');
  }
  }catch(error){const errorBox=$('#form-error');if(errorBox)errorBox.textContent=error.message;else toast(error.message);}
 });

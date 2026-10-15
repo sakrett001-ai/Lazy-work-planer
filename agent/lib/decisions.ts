@@ -1,4 +1,5 @@
 import type { State, Employee } from './store';
+import { taskMemory } from '../../dist/task-memory.js';
 
 export type DecisionInput = {
   taskId: string;
@@ -19,6 +20,7 @@ export function decisionContext(state: State, actor: Employee, taskId: string) {
     employee: state.employees.filter(e => e.id === task.employeeId).map(e => ({ id:e.id, name:e.name }))[0] || null,
     sources: state.sources.filter(s => s.taskId === taskId).slice(-8).map(s => ({ id:s.id, text:s.text, receivedAt:s.receivedAt, employeeId:s.employeeId })),
     recentEvents: state.events.filter(e => e.taskId === taskId).slice(0, 10),
+    memory: taskMemory(state, actor, taskId, { limit: 12 }),
     delivery: 'draft_only' as const,
   };
 }
