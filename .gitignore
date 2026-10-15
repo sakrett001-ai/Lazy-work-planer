@@ -6,6 +6,8 @@ node_modules
 .output
 .nitro
 .data/
+*.sqlite
+*.sqlite-*
 !.env.example
 .DS_Store
 *.tsbuildinfo
