@@ -117,6 +117,7 @@ test('Веб-консультация: явное подключение, про
   const workflow=(await import('../agent/tools/run_monitoring_graph.ts')).default;
   assert.throws(()=>workflow.execute({eventType:'check_in_request',taskId:'Т-1'},ctx),/Веб-консультация/);
   assert.deepEqual(store.readState(),before);
+  proto.readAssistantContext(ctx,'Т-1');
   assert.throws(()=>proto.finishAssistantJob(ctx,{text:'Ответ',references:[{sourceId:store.readState().sources[0].id,quote:'Выдуманная цитата'}]}),/Цитата/);
   await ok('message',command({taskId:'Т-1',text:'Уточнён контекст.'}),boss);
   await ok('task-action',command({...await target('Т-1',boss),action:'unblock'}),boss);

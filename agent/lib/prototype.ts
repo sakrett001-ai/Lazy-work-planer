@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { readState, updateState, type Employee, type State } from './store.ts';
+import { readState, updateState, currentEmployee, type Employee, type State } from './store.ts';
 import { digest, issueInvite, webTables, WebError } from './web-auth.ts';
 import { canReadTask } from '../../dist/access.js';
 import { validDate } from '../../dist/domain.js';
 import { addTask, editTask, changeTask, savePhase, setPhase, makeDraft, proposal } from '../../dist/workspace-model.js';
 import { saveDecisionDraft } from './decisions.ts';
+import { taskMemory } from '../../dist/task-memory.js';
+import { assistantContext, contextVersion, readSourcePage, sourceVersion, mergeEvidenceReads, verifyReadReferences, type EvidenceRead } from './assistant-memory.ts';
 
 const id = z.string().trim().min(1).max(150);
 const version = z.string().regex(/^[a-f0-9]{64}$/);
@@ -151,23 +153,30 @@ export function inviteParticipant(raw: unknown, actor: Employee) {
   return { code: issueInvite(employeeId), expiresInMinutes: 30, employeeId };
 }
 
-export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; text?: string; error?: string; stale?: boolean; references?: {sourceId:string;quote:string}[] };
+export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; contextVersion?: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; startedAt?: string; text?: string; error?: string; stale?: boolean; references?: {sourceId:string;quote:string;version?:string}[]; contextRead?: {version:string;at:string}; evidenceReads?: EvidenceRead[] };
+const expired = (job: AssistantJob) => Date.now() - Date.parse(job.startedAt || job.createdAt) >= 10 * 60000;
 export function getJob(jobId: string): AssistantJob|undefined {
   const row = tables().prepare('SELECT data FROM web_assistant_jobs WHERE id=?').get(jobId) as {data:string}|undefined;
   return row && JSON.parse(row.data);
 }
 function putJob(job: AssistantJob) { tables().prepare('INSERT INTO web_assistant_jobs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(job.id, job.actorId, JSON.stringify(job)); }
 export function assistantJobs(actor: Employee, taskId: string) {
-  allowedTask(readState(), actor, taskId);
+  const state = readState();
+  allowedTask(state, actor, taskId);
+  if (state.employees.find(p => p.id === actor.id)?.role !== 'manager') return [];
   const jobs = (tables().prepare("SELECT data FROM web_assistant_jobs WHERE actor_id=? AND json_extract(data,'$.taskId')=? ORDER BY rowid DESC LIMIT 20").all(actor.id, taskId) as {data:string}[]).map(row => JSON.parse(row.data) as AssistantJob);
-  for (const job of jobs) if (['pending', 'running'].includes(job.status) && Date.now() - Date.parse(job.updatedAt) > 10 * 60000) { failAssistantJob(job.id); Object.assign(job, getJob(job.id)); }
+  const current = contextVersion(state, actor, taskId), task = state.tasks.find(t => t.id === taskId);
+  for (const job of jobs) {
+    if (['pending', 'running'].includes(job.status) && expired(job)) { failAssistantJob(job.id); Object.assign(job, getJob(job.id)); }
+    job.stale = Boolean(job.stale) || (job.contextVersion ? job.contextVersion !== current : job.taskVersion !== versionOf(task));
+  }
   return jobs;
 }
 export function createAssistantJob(raw: unknown, actor: Employee, available: boolean) {
   manager(actor);
   if (!available) throw new WebError(503, 'ИИ подключается при запуске сервера eve. Сейчас доступны сводка и редактируемые шаблоны.');
   const input = z.object({ ...target, question: z.string().trim().min(1).max(2000) }).strict().parse(raw);
-  const task = allowedTask(readState(), actor, input.taskId), jobId = `web-job:${actor.id}:${input.requestId}`;
+  const state = readState(), task = allowedTask(state, actor, input.taskId), jobId = `web-job:${actor.id}:${input.requestId}`;
   const previous = getJob(jobId);
   if (previous) {
     if (previous.taskId !== input.taskId || previous.question !== input.question || previous.taskVersion !== input.expectedVersion) throw new WebError(409, 'Этот запрос уже использован.');
@@ -176,12 +185,12 @@ export function createAssistantJob(raw: unknown, actor: Employee, available: boo
   fresh(task, input.expectedVersion);
   if (assistantJobs(actor, input.taskId).some(job => job.status === 'pending' || job.status === 'running')) throw new WebError(409, 'По этой задаче уже готовится ответ. Дождитесь его завершения.');
   const at = new Date().toISOString();
-  putJob({ id: jobId, actorId: actor.id, taskId: task.id, question: input.question, taskVersion: versionOf(task), status: 'pending', createdAt: at, updatedAt: at });
+  putJob({ id: jobId, actorId: actor.id, taskId: task.id, question: input.question, taskVersion: versionOf(task), contextVersion: contextVersion(state, actor, task.id), status: 'pending', createdAt: at, updatedAt: at });
   return { ok: true, jobId, duplicate: false };
 }
 export function claimAssistantJob(jobId: string): AssistantJob|undefined {
   let claimed: AssistantJob|undefined;
-  updateState(state => { const job = getJob(jobId); if (job?.status === 'pending') { job.status = 'running'; job.updatedAt = new Date().toISOString(); putJob(job); claimed = job; } return state; });
+  updateState(state => { const job = getJob(jobId); if (job?.status === 'pending' && !expired(job)) { job.status = 'running'; job.startedAt = job.updatedAt = new Date().toISOString(); putJob(job); claimed = job; } return state; });
   return claimed;
 }
 export function failAssistantJob(jobId: string) {
@@ -190,7 +199,49 @@ export function failAssistantJob(jobId: string) {
 export function webJobFor(ctx: any) {
   const jobId = ctx.session.auth.current?.attributes?.webJobId;
   const job = typeof jobId === 'string' ? getJob(jobId) : undefined;
-  if (!job || job.actorId !== ctx.session.auth.current?.principalId) throw new Error('Нет проверенного запроса из рабочего пространства.');
+  if (!job || job.actorId !== ctx.session.auth.current?.principalId || currentEmployee(ctx).role !== 'manager') throw new Error('Нет проверенного запроса из рабочего пространства.');
+  return job;
+}
+export function activeWebJob(ctx: any, taskId?: string) {
+  const job = webJobFor(ctx);
+  if (taskId && job.taskId !== taskId) throw new WebError(403, 'Консультация ограничена выбранной задачей.');
+  if (job.status !== 'running' || expired(job)) throw new WebError(409, 'Консультация завершена или истекло время ожидания. Создайте новый запрос.');
+  return job;
+}
+function rememberRead(ctx: any, taskId: string, reads: EvidenceRead[], version?: string) {
+  if (!ctx.session.auth.current?.attributes?.webJobId) return;
+  updateState(state => {
+    const job = activeWebJob(ctx, taskId);
+    job.evidenceReads = mergeEvidenceReads(job.evidenceReads || [], reads);
+    if (version) job.contextRead = { version, at: new Date().toISOString() };
+    putJob(job); return state;
+  });
+}
+export function readAssistantContext(ctx: any, taskId: string) {
+  if (ctx.session.auth.current?.attributes?.webJobId) activeWebJob(ctx, taskId);
+  const pack = assistantContext(readState(), currentEmployee(ctx), taskId);
+  rememberRead(ctx, taskId, pack.sources.map(s => ({ sourceId: s.sourceId, version: s.version, start: 0, end: s.end })), pack.contextVersion);
+  return pack;
+}
+export function readAssistantSource(ctx: any, input: { taskId: string; sourceId: string; version: string; offset?: number; limit?: number }) {
+  if (ctx.session.auth.current?.attributes?.webJobId) activeWebJob(ctx, input.taskId);
+  const page = readSourcePage(readState(), currentEmployee(ctx), input);
+  rememberRead(ctx, input.taskId, [{ sourceId: page.id, version: page.version, start: page.offset, end: page.end }]);
+  return page;
+}
+export function readAssistantHistory(ctx: any, taskId: string, options: {before?: string; limit?: number}) {
+  if (ctx.session.auth.current?.attributes?.webJobId) activeWebJob(ctx, taskId);
+  const state = readState(), actor = currentEmployee(ctx), memory = taskMemory(state, actor, taskId, options);
+  const sources = state.sources.filter(s => s.taskId === taskId && memory.sources.some((m: any) => m.id === s.id));
+  rememberRead(ctx, taskId, sources.map(s => ({ sourceId: s.id, version: sourceVersion(s), start: 0, end: Array.from(String(s.text)).length })), contextVersion(state, actor, taskId));
+  const task = state.tasks.find(t => t.id === taskId);
+  return { ...memory, details: { description: task.description || '', project: task.project || '', protocol: task.protocol || null, phases: task.phases || [] } };
+}
+export function verifyWebEvidence(ctx: any, state: State, references: {sourceId:string;quote:string}[]) {
+  const job = activeWebJob(ctx);
+  verifyReadReferences(state, job.taskId, job.evidenceReads || [], references);
+  if (!job.contextRead) throw new WebError(409, 'Сначала прочитай актуальную память задачи через get_task_context.');
+  if (!references.length && state.sources.some(s => s.taskId === job.taskId && s.text?.trim())) throw new WebError(400, 'Добавь хотя бы одну проверяемую цитату из сообщения по задаче.');
   return job;
 }
 export function assertWebReadOnly(ctx: any) {
@@ -202,8 +253,14 @@ export function finishAssistantJob(ctx: any, input: {text:string;references:{sou
     const job = webJobFor(ctx), actor = state.employees.find(p => p.id === job.actorId);
     if (!actor || actor.role !== 'manager') throw new Error('Нет доступа к консультации.');
     const task = allowedTask(state, actor, job.taskId);
-    for (const ref of input.references) if (!state.sources.some(s => s.id === ref.sourceId && s.taskId === task.id && s.text.includes(ref.quote) && ref.quote.trim())) throw new Error('Цитата не подтверждена источником этой задачи.');
-    if (job.status !== 'completed') { Object.assign(job, input, { status: 'completed', stale: versionOf(task) !== job.taskVersion, updatedAt: new Date().toISOString() }); putJob(job); }
+    if (job.status === 'completed') {
+      if (job.text !== input.text || JSON.stringify(job.references?.map(({sourceId, quote}) => ({sourceId, quote}))) !== JSON.stringify(input.references)) throw new WebError(409, 'Ответ уже сохранён с другим содержимым.');
+      result = job; return state;
+    }
+    verifyWebEvidence(ctx, state, input.references);
+    Object.assign(job, input, { references: input.references.map(ref => ({ ...ref, version: sourceVersion(state.sources.find(s => s.id === ref.sourceId && s.taskId === task.id)) })),
+      status: 'completed', stale: job.contextVersion ? job.contextVersion !== contextVersion(state, actor, task.id) : versionOf(task) !== job.taskVersion, updatedAt: new Date().toISOString() });
+    putJob(job);
     result = job; return state;
   });
   return { saved: true, jobId: result!.id };
