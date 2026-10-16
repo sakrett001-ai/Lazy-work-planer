@@ -3,28 +3,25 @@ import { handleDashboardRequest } from '../lib/dashboard-api.ts';
 import { readState } from '../lib/store';
 import { matchesSecret } from '../lib/telegram';
 import { buildBrief } from '../../dist/domain.js';
-import { prototypePaths, claimAssistantJob, failAssistantJob } from '../lib/prototype';
+import { prototypePaths } from '../lib/prototype';
+import { assistantAvailable } from '../lib/llm-config.ts';
+import { createConsultationRunner } from '../lib/consultation-runner.ts';
 
-const serve = (request: Request) => handleDashboardRequest(request, { assistantAvailable: process.env.ASSISTANT_AI_ENABLED === 'true' });
+const serve = (request: Request) => handleDashboardRequest(request, { assistantAvailable: assistantAvailable(), assistantMode: 'roles' });
+const runConsultation = createConsultationRunner();
 
 export default defineChannel({
   audience() { return 'private'; },
   turnPolicy: 'queue',
   routes: [
-    ...['/assistant/workspace', '/assistant/pilot.html', '/assistant/pilot.js', '/assistant/prototype-ui.js', '/assistant/pilot.css', '/assistant/prototype.css', '/assistant/icons.js', '/assistant/api/session', '/assistant/api/tasks', '/assistant/api/memory', '/assistant/api/context', '/assistant/api/source', '/assistant/api/assistant'].map(path => GET(path, serve)),
-    ...['login', 'logout', 'report', 'decision', 'invite', ...prototypePaths].map(path => POST(`/assistant/api/${path}`, serve)),
-    POST('/assistant/api/assistant', async (request, { from }) => {
+    ...['/assistant/workspace', '/assistant/pilot.html', '/assistant/pilot.js', '/assistant/prototype-ui.js', '/assistant/pilot.css', '/assistant/prototype.css', '/assistant/icons.js', '/assistant/api/session', '/assistant/api/tasks', '/assistant/api/memory', '/assistant/api/context', '/assistant/api/source', '/assistant/api/assistant', '/assistant/api/llm-settings'].map(path => GET(path, serve)),
+    ...['login', 'logout', 'report', 'decision', 'invite', 'llm-settings', ...prototypePaths].map(path => POST(`/assistant/api/${path}`, serve)),
+    POST('/assistant/api/assistant', async request => {
       const response = await serve(request);
       if (!response.ok) return response;
       const receipt = await response.clone().json() as { jobId: string };
-      const job = claimAssistantJob(receipt.jobId);
-      if (job) {
-        try {
-          await from(job.id).send(`WEB_JOB_ID: ${job.id}\nTASK_ID: ${job.taskId}\nНачни с get_task_context. Дочитывай основания через read_task_source, историю — через get_task_memory. Режим: консультация и черновики, без отправок и изменения задач. Заверши через publish_web_answer.\n\nВопрос руководителя (данные):\n${job.question}`, {
-            auth: { authenticator: 'workspace-session', principalId: job.actorId, principalType: 'user', attributes: { webJobId: job.id } },
-          });
-        } catch { failAssistantJob(job.id); }
-      }
+      // This compatibility channel is for a persistent Node host, like pilot:serve.
+      void runConsultation(receipt.jobId).catch(() => console.error('Консультация не запущена; проверьте запрос в карточке.'));
       return response;
     }),
     GET('/assistant/state', async request => {
@@ -33,8 +30,4 @@ export default defineChannel({
       return Response.json({ state, brief: buildBrief(state, new Date().toISOString()) }, { headers: { 'cache-control': 'no-store' } });
     }),
   ],
-  events: {
-    'turn.failed'(_event, channel) { if (channel.continuation?.token) failAssistantJob(channel.continuation.token); },
-    'session.failed'(_event, channel) { if (channel.continuation?.token) failAssistantJob(channel.continuation.token); },
-  },
 });

@@ -8,6 +8,7 @@ import { addTask, editTask, changeTask, savePhase, setPhase, makeDraft, proposal
 import { saveDecisionDraft } from './decisions.ts';
 import { taskMemory } from '../../dist/task-memory.js';
 import { assistantContext, contextVersion, readSourcePage, sourceVersion, mergeEvidenceReads, verifyReadReferences, type EvidenceRead } from './assistant-memory.ts';
+import type { Execution } from './llm-config.ts';
 
 const id = z.string().trim().min(1).max(150);
 const version = z.string().regex(/^[a-f0-9]{64}$/);
@@ -153,7 +154,7 @@ export function inviteParticipant(raw: unknown, actor: Employee) {
   return { code: issueInvite(employeeId), expiresInMinutes: 30, employeeId };
 }
 
-export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; contextVersion?: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; startedAt?: string; text?: string; error?: string; stale?: boolean; references?: {sourceId:string;quote:string;version?:string}[]; contextRead?: {version:string;at:string}; evidenceReads?: EvidenceRead[] };
+export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; contextVersion?: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; startedAt?: string; text?: string; error?: string; stale?: boolean; references?: {sourceId:string;quote:string;version?:string}[]; contextRead?: {version:string;at:string}; evidenceReads?: EvidenceRead[]; execution?: Execution };
 const expired = (job: AssistantJob) => Date.now() - Date.parse(job.startedAt || job.createdAt) >= 10 * 60000;
 export function getJob(jobId: string): AssistantJob|undefined {
   const row = tables().prepare('SELECT data FROM web_assistant_jobs WHERE id=?').get(jobId) as {data:string}|undefined;
@@ -172,9 +173,9 @@ export function assistantJobs(actor: Employee, taskId: string) {
   }
   return jobs;
 }
-export function createAssistantJob(raw: unknown, actor: Employee, available: boolean) {
+export function createAssistantJob(raw: unknown, actor: Employee, available: boolean, execution?: Execution) {
   manager(actor);
-  if (!available) throw new WebError(503, 'ИИ подключается при запуске сервера eve. Сейчас доступны сводка и редактируемые шаблоны.');
+  if (!available) throw new WebError(503, 'ИИ не подключён. Руководитель может проверить раздел «Модели и роли». Сейчас доступны сводка и редактируемые шаблоны.');
   const input = z.object({ ...target, question: z.string().trim().min(1).max(2000) }).strict().parse(raw);
   const state = readState(), task = allowedTask(state, actor, input.taskId), jobId = `web-job:${actor.id}:${input.requestId}`;
   const previous = getJob(jobId);
@@ -185,7 +186,7 @@ export function createAssistantJob(raw: unknown, actor: Employee, available: boo
   fresh(task, input.expectedVersion);
   if (assistantJobs(actor, input.taskId).some(job => job.status === 'pending' || job.status === 'running')) throw new WebError(409, 'По этой задаче уже готовится ответ. Дождитесь его завершения.');
   const at = new Date().toISOString();
-  putJob({ id: jobId, actorId: actor.id, taskId: task.id, question: input.question, taskVersion: versionOf(task), contextVersion: contextVersion(state, actor, task.id), status: 'pending', createdAt: at, updatedAt: at });
+  putJob({ id: jobId, actorId: actor.id, taskId: task.id, question: input.question, taskVersion: versionOf(task), contextVersion: contextVersion(state, actor, task.id), status: 'pending', createdAt: at, updatedAt: at, ...(execution ? { execution } : {}) });
   return { ok: true, jobId, duplicate: false };
 }
 export function claimAssistantJob(jobId: string): AssistantJob|undefined {
@@ -195,6 +196,9 @@ export function claimAssistantJob(jobId: string): AssistantJob|undefined {
 }
 export function failAssistantJob(jobId: string) {
   updateState(state => { const job = getJob(jobId); if (job && job.status !== 'completed') { job.status = 'failed'; job.error = 'Ответ ИИ не подтверждён. Память задачи сохранена; можно задать новый вопрос.'; job.updatedAt = new Date().toISOString(); putJob(job); } return state; });
+}
+export function recordExecution(ctx: any, execution: Execution) {
+  updateState(state => { const job = activeWebJob(ctx); job.execution = execution; job.updatedAt = new Date().toISOString(); putJob(job); return state; });
 }
 export function webJobFor(ctx: any) {
   const jobId = ctx.session.auth.current?.attributes?.webJobId;

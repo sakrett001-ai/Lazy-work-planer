@@ -1,0 +1,12 @@
+# Optional overlay: docker compose -f compose.prototype.yaml -f compose.ai.yaml up --build
+services:
+  assistant:
+    env_file: .env
+    environment:
+      ASSISTANT_AI_ENABLED: "true"
+      ASSISTANT_LLM_CONFIG: /app/config/llm.local.json
+      ASSISTANT_HOST: 0.0.0.0
+      ASSISTANT_PORT: "8787"
+      ASSISTANT_DATA_DIR: /data
+    volumes:
+      - ./config/llm.local.json:/app/config/llm.local.json:ro

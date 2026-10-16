@@ -10,6 +10,7 @@ import { runAssistantWorkflow } from '../../dist/langgraph-emb.js';
 import { preferences, prototypePaths, prototypeWrite, inviteParticipant, createAssistantJob, assistantJobs, versionOf } from './prototype.ts';
 import { proposal } from '../../dist/workspace-model.js';
 import { assistantContext, readSourcePage } from './assistant-memory.ts';
+import { roleSettings, saveRoleSettings, executionPlan } from './llm-config.ts';
 
 const reportSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), text: z.string().trim().min(1).max(4000) }).strict();
 const decisionSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), action: z.enum(['accept', 'approve_due', 'reject_due', 'take_control']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -40,7 +41,8 @@ async function readJson(request: Request) {
   catch { throw new WebError(400, 'Не удалось прочитать запрос.'); }
 }
 
-async function route(request: Request, options: { assistantAvailable?: boolean }) {
+type DashboardOptions = { assistantAvailable?: boolean; assistantMode?: 'roles'|'eve' };
+async function route(request: Request, options: DashboardOptions) {
   const url = new URL(request.url), path = url.pathname;
   if (request.method === 'GET' && assets[path]) {
     const [name, type] = assets[path];
@@ -66,7 +68,7 @@ async function route(request: Request, options: { assistantAvailable?: boolean }
     const ids = new Set(state.tasks.map((task: any) => task.id)), prefs = preferences(actor.id);
     return json({ tasks: state.tasks.map((task: any) => ({ ...task, version: taskVersion(task) })), employees: state.employees, brief: buildBrief(state, at), asOf: at,
       preferences: { pins: prefs.pins.filter(id => ids.has(id)), seen: Object.fromEntries(Object.entries(prefs.seen).filter(([id]) => ids.has(id))) },
-      assistant: { available: Boolean(options.assistantAvailable), mode: options.assistantAvailable ? 'eve' : 'rules' },
+      assistant: { available: Boolean(options.assistantAvailable), mode: options.assistantAvailable ? options.assistantMode || 'eve' : 'rules' },
       activity: state.events.slice(0, 12), examples: Boolean((state.settings as any).prototypeExamples), autoCheckins: Boolean((state.settings as any).prototypeAutoCheckins) });
   }
   if (path === '/assistant/api/memory' && request.method === 'GET') {
@@ -84,7 +86,12 @@ async function route(request: Request, options: { assistantAvailable?: boolean }
     return json(readSourcePage(readState(), actor, input));
   }
   if (path === '/assistant/api/assistant' && request.method === 'GET') return json({ jobs: assistantJobs(actor, url.searchParams.get('taskId') || '') });
-  if (path === '/assistant/api/assistant' && request.method === 'POST') return json(createAssistantJob(await readJson(request), actor, Boolean(options.assistantAvailable)));
+  if (path === '/assistant/api/assistant' && request.method === 'POST') {
+    if (actor.role !== 'manager') throw new WebError(403, 'Консультация доступна руководителю.');
+    return json(createAssistantJob(await readJson(request), actor, Boolean(options.assistantAvailable), options.assistantMode === 'roles' && options.assistantAvailable ? executionPlan() : undefined));
+  }
+  if (path === '/assistant/api/llm-settings' && request.method === 'GET') return json(roleSettings(actor));
+  if (path === '/assistant/api/llm-settings' && request.method === 'POST') return json(saveRoleSettings(await readJson(request), actor));
   if (path === '/assistant/api/invite' && request.method === 'POST') return json(inviteParticipant(await readJson(request), actor));
   const action = path.replace('/assistant/api/', '');
   if (request.method === 'POST' && prototypePaths.includes(action)) return json(prototypeWrite(action, await readJson(request), actor));
@@ -134,7 +141,7 @@ async function route(request: Request, options: { assistantAvailable?: boolean }
   return json({ error: 'Действие не найдено.' }, 404);
 }
 
-export async function handleDashboardRequest(request: Request, options: { assistantAvailable?: boolean } = {}) {
+export async function handleDashboardRequest(request: Request, options: DashboardOptions = {}) {
   let response: Response;
   try { response = await route(request, options); }
   catch (error) {
