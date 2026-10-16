@@ -9,6 +9,7 @@ import { buildBrief, decide } from '../../dist/domain.js';
 import { runAssistantWorkflow } from '../../dist/langgraph-emb.js';
 import { preferences, prototypePaths, prototypeWrite, inviteParticipant, createAssistantJob, assistantJobs, versionOf } from './prototype.ts';
 import { proposal } from '../../dist/workspace-model.js';
+import { assistantContext, readSourcePage } from './assistant-memory.ts';
 
 const reportSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), text: z.string().trim().min(1).max(4000) }).strict();
 const decisionSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), action: z.enum(['accept', 'approve_due', 'reject_due', 'take_control']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -76,6 +77,11 @@ async function route(request: Request, options: { assistantAvailable?: boolean }
     return json({ ...memory, taskVersion: taskVersion(task), task, suggestion: actor.role === 'manager' ? proposal(task) : null,
       drafts: actor.role === 'manager' ? (state.decisionDrafts || []).filter(d => d.taskId === taskId).slice(-30).map((draft: any) => ({ ...draft, version: versionOf(draft) })) : [],
       conversation: state.sources.filter(s => s.taskId === taskId).slice(-50).map(s => ({ ...s, authorName: s.authorName || state.employees.find(p => p.id === s.employeeId)?.name || 'Участник' })) });
+  }
+  if (path === '/assistant/api/context' && request.method === 'GET') return json(assistantContext(readState(), actor, url.searchParams.get('taskId') || ''));
+  if (path === '/assistant/api/source' && request.method === 'GET') {
+    const input = z.object({ taskId: z.string().min(1).max(150), sourceId: z.string().min(1).max(150), version: z.string().regex(/^[a-f0-9]{64}$/).optional(), offset: z.coerce.number().int().min(0).optional(), limit: z.coerce.number().int().min(1).max(2000).optional() }).strict().parse(Object.fromEntries(url.searchParams));
+    return json(readSourcePage(readState(), actor, input));
   }
   if (path === '/assistant/api/assistant' && request.method === 'GET') return json({ jobs: assistantJobs(actor, url.searchParams.get('taskId') || '') });
   if (path === '/assistant/api/assistant' && request.method === 'POST') return json(createAssistantJob(await readJson(request), actor, Boolean(options.assistantAvailable)));

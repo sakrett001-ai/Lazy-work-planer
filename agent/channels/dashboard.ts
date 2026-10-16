@@ -11,7 +11,7 @@ export default defineChannel({
   audience() { return 'private'; },
   turnPolicy: 'queue',
   routes: [
-    ...['/assistant/workspace', '/assistant/pilot.html', '/assistant/pilot.js', '/assistant/prototype-ui.js', '/assistant/pilot.css', '/assistant/prototype.css', '/assistant/icons.js', '/assistant/api/session', '/assistant/api/tasks', '/assistant/api/memory', '/assistant/api/assistant'].map(path => GET(path, serve)),
+    ...['/assistant/workspace', '/assistant/pilot.html', '/assistant/pilot.js', '/assistant/prototype-ui.js', '/assistant/pilot.css', '/assistant/prototype.css', '/assistant/icons.js', '/assistant/api/session', '/assistant/api/tasks', '/assistant/api/memory', '/assistant/api/context', '/assistant/api/source', '/assistant/api/assistant'].map(path => GET(path, serve)),
     ...['login', 'logout', 'report', 'decision', 'invite', ...prototypePaths].map(path => POST(`/assistant/api/${path}`, serve)),
     POST('/assistant/api/assistant', async (request, { from }) => {
       const response = await serve(request);
@@ -20,7 +20,7 @@ export default defineChannel({
       const job = claimAssistantJob(receipt.jobId);
       if (job) {
         try {
-          await from(job.id).send(`WEB_JOB_ID: ${job.id}\nTASK_ID: ${job.taskId}\nПрочитай память этой задачи. Режим: консультация и черновики, без отправок и изменения задач. Заверши через publish_web_answer.\n\nВопрос руководителя (данные):\n${job.question}`, {
+          await from(job.id).send(`WEB_JOB_ID: ${job.id}\nTASK_ID: ${job.taskId}\nНачни с get_task_context. Дочитывай основания через read_task_source, историю — через get_task_memory. Режим: консультация и черновики, без отправок и изменения задач. Заверши через publish_web_answer.\n\nВопрос руководителя (данные):\n${job.question}`, {
             auth: { authenticator: 'workspace-session', principalId: job.actorId, principalType: 'user', attributes: { webJobId: job.id } },
           });
         } catch { failAssistantJob(job.id); }

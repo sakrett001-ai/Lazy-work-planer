@@ -9,6 +9,7 @@ export function installPrototype(ctx) {
   const $ = s => document.querySelector(s);
   let view='board', month=today().slice(0,7)+'-01', lastInteraction=Date.now(), auto=false, draft=null, editingTask=null, editingPhase=null, jobsFor=null, lastSignal='';
   const pending=new Map();
+  const jobViews=new WeakMap();
   const state=()=>ctx.get();
   const manager=()=>state().identity?.role==='manager';
   const selectedTask=()=>state().memory?.task || state().snapshot?.tasks.find(t=>t.id===state().selected);
@@ -77,6 +78,7 @@ export function installPrototype(ctx) {
       <section class="detail-section"><h3>Обсуждение задачи</h3><div class="conversation">${(memory.conversation||[]).map(s=>`<article class="bubble ${s.kind==='manager_message'?'from-manager':''}"><small>${esc(s.authorName)} · ${ctx.date(s.occurredAt||s.receivedAt,true)}</small><p>${esc(s.text)}</p></article>`).join('')||'<p class="report-note">Обсуждение начнётся с первого сообщения.</p>'}</div>
       ${own?`<form id="report-form"><label for="report-text">Что готово и где нужна помощь?</label><textarea id="report-text" maxlength="4000" required placeholder="Например: ожидаем исходные данные, нужна помощь…"></textarea><p class="report-note">Ответ сохраняется вместе с источником. Разбор статуса сейчас выполняется по правилам; приёмку и перенос подтверждает руководитель.</p><button class="primary" type="submit">Сообщить статус ↗</button></form>`:manager()&&current.status!=='done'?`<form id="message-form"><label for="manager-message">Сообщение исполнителю</label><textarea id="manager-message" name="text" maxlength="4000" required placeholder="Уточни готовый результат или предложи следующий шаг…"></textarea><label class="check-label"><input type="checkbox" name="requestUpdate"> Запросить обновление статуса</label><button class="primary" type="submit">Добавить в обсуждение ↗</button><small class="report-note">Сообщение появится у исполнителя в этой задаче.</small></form>`:''}</section>
       ${manager()?`<section class="detail-section assistant-section"><span class="eyebrow">Ассистент · следующий шаг</span><h3>${esc(suggested?.title||'Подготовить решение')}</h3><p>${esc(suggested?.detail||'')}</p><div class="actions">${Object.entries(draftNames).map(([kind,label])=>smallButton(`data-template="${kind}"`,label)).join('')}</div><p class="report-note">Эти кнопки создают редактируемые шаблоны на основе карточки. Сроки и отправки остаются отдельными действиями.</p>
+      <details class="context-preview"><summary>Что получит ассистент</summary><p class="report-note">Текущие факты, открытые вопросы и фрагменты сообщений. Полные источники доступны для дочитывания.</p>${smallButton('id="preview-context"','Показать контекст')}<div id="context-preview-content"></div></details>
       <details class="ai-consultation" ${state().snapshot.assistant.available?'open':''}><summary>Обсудить с ИИ</summary>${state().snapshot.assistant.available?`<form id="assistant-form"><label for="assistant-question">Какое решение нужно подготовить?</label><textarea id="assistant-question" name="question" maxlength="2000" required placeholder="Предложи варианты снятия препятствия и подготовь письмо…"></textarea><button type="submit" class="secondary">Получить варианты ✦</button></form>`:'<p class="report-note">Для консультации запусти сервер eve с подключённой моделью. Текущий режим сохраняет задачи, обсуждение и шаблоны без обращения к ИИ.</p>'}<div id="assistant-jobs"></div></details></section>`:''}
       <section class="detail-section"><div class="section-heading"><h3>Этапы <span class="muted">${phases.filter(p=>p.done).length}/${phases.length}</span></h3>${manager()&&current.status!=='done'?smallButton('data-new-phase','+ Этап'):''}</div>${phases.length?`<progress max="${phases.length}" value="${phases.filter(p=>p.done).length}"></progress><div class="phase-list">${phases.map(p=>`<div class="phase-item"><button class="phase-check" data-phase-toggle="${esc(p.id)}" aria-label="${p.done?'Открыть':'Завершить'} этап ${esc(p.title)}" ${current.status==='done'?'disabled data-unavailable="true"':''}>${p.done?'✓':'○'}</button><div><strong>${esc(p.title)}</strong><small>${ctx.date(p.start)} — ${ctx.date(p.end)}${p.dependsOn?' · после «'+esc(phases.find(x=>x.id===p.dependsOn)?.title||'этапа')+'»':''}</small></div>${manager()&&current.status!=='done'?`<button class="quiet" data-edit-phase="${esc(p.id)}" aria-label="Изменить этап ${esc(p.title)}">Изменить</button>`:''}</div>`).join('')}</div>`:'<p class="report-note">Для составной задачи добавь этапы и зависимости. Они появятся в диаграмме Ганта.</p>'}</section>
       ${manager()?`<section class="detail-section"><h3>Подготовленные документы</h3>${(memory.drafts||[]).map(d=>`<article class="draft"><small>${d.status==='approved'?'Текст согласован · отправка не выполнялась':'Черновик · нужно проверить'} · ${d.generator==='template'?'шаблон':'подготовлен ассистентом'}</small><h3>${esc(d.title)}</h3><p>${esc(d.reason||'')}</p><div class="actions">${smallButton(`data-edit-draft="${esc(d.id)}"`,'Открыть и редактировать')}</div></article>`).join('')||'<p class="report-note">Здесь будут письма, планы и варианты решения.</p>'}</section>`:''}
@@ -117,12 +119,42 @@ export function installPrototype(ctx) {
     const evidence=`<details><summary>Варианты и основания</summary><p>${esc(draft.reason||'Основание отдельно не указано.')}</p><ul>${(draft.options||[]).map(option=>`<li><strong>${esc(option.label)}</strong> — ${esc(option.consequence)}</li>`).join('')}</ul>${(draft.references||[]).map(ref=>`<blockquote>${esc(ref.quote)}<small>Источник: ${esc(ref.sourceId)} · исходные сообщения доступны в памяти задачи</small></blockquote>`).join('')}</details>`;
     openEditor('Документ к решению',`${evidence}<form id="draft-editor">${input('title','Заголовок',draft.title,'text','required maxlength="200"')}<label>Текст<textarea class="document-body" name="body" required maxlength="6000">${esc(draft.body)}</textarea></label><label>Состояние<select name="status"><option value="draft">Черновик</option><option value="approved" ${draft.status==='approved'?'selected':''}>Текст согласован</option></select></label><p class="report-note">Согласование текста не меняет срок задачи и не отправляет письмо. Поля в квадратных скобках требуют заполнения.</p><div class="actions"><button class="primary" type="submit">Сохранить документ</button>${smallButton('id="download-draft"','Скачать .txt')}</div></form>`);
   }
+  function sourceReader(sourceId,version='') {
+    return `<div class="source-reader"><div class="source-pages"></div>${smallButton(`data-source-open="${esc(sourceId)}" data-source-version="${esc(version)}" data-source-offset="0"`,'Читать исходное сообщение')}</div>`;
+  }
+  async function previewContext(button) {
+    const {selected,identity}=state(),box=$('#context-preview-content');button.disabled=true;
+    try {
+      const pack=await ctx.api('context?taskId='+encodeURIComponent(selected));
+      if(state().selected!==selected||state().identity?.id!==identity.id||!box.isConnected)return;
+      box.innerHTML=`<p><strong>${esc(labels[pack.current.status]||pack.current.status)}</strong> · Срок: ${ctx.date(pack.current.due)}${pack.current.proposedDue?' · Предложено: '+ctx.date(pack.current.proposedDue):''}</p><p>${esc(pack.current.summary)}</p>${pack.current.blocker?`<p>Препятствие: ${esc(pack.current.blocker)}</p>`:''}<ul>${pack.openQuestions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul><p class="report-note">Фрагментов: ${pack.sources.length} из ${pack.coverage.totalSources}. ${pack.coverage.omittedSources||pack.coverage.truncatedFields.length?'Часть сведений сокращена; ассистент может дочитать память и оригиналы.':'Для дополнительной проверки можно открыть оригиналы.'}</p>${pack.sources.map(s=>`<article class="context-source"><small>${esc(s.author)} · ${ctx.date(s.occurredAt,true)}</small><p>${esc(s.preview)}${s.nextOffset!==null?'…':''}</p>${sourceReader(s.sourceId,s.version)}</article>`).join('')}`;
+      button.textContent='Обновить контекст';
+    }catch(error){if(box.isConnected&&state().selected===selected&&state().identity?.id===identity.id)box.textContent=error.message;}
+    finally{button.disabled=false;}
+  }
+  async function readSource(button) {
+    if(button.disabled)return;
+    const {selected,identity}=state(),reader=button.closest('.source-reader'),pages=reader.querySelector('.source-pages');button.disabled=true;
+    reader.querySelector('.source-error')?.remove();
+    const query=new URLSearchParams({taskId:selected,sourceId:button.dataset.sourceOpen,offset:button.dataset.sourceOffset,limit:'1600'});
+    if(button.dataset.sourceVersion)query.set('version',button.dataset.sourceVersion);
+    try {
+      const page=await ctx.api('source?'+query);
+      if(state().selected!==selected||state().identity?.id!==identity.id||!reader.isConnected)return;
+      pages.insertAdjacentHTML('beforeend',`<article class="source-page"><small>${esc(page.authorName)} · ${ctx.date(page.occurredAt,true)} · ${page.offset+1}–${page.end} из ${page.totalCharacters}</small><p>${esc(page.text)}</p></article>`);
+      if(page.nextOffset===null)button.remove();
+      else{button.dataset.sourceVersion=page.version;button.dataset.sourceOffset=String(page.nextOffset);button.textContent='Читать дальше';}
+    }catch(error){if(reader.isConnected&&state().selected===selected&&state().identity?.id===identity.id)reader.insertAdjacentHTML('beforeend',`<p class="message source-error">${esc(error.message)}</p>`);}
+    finally{button.disabled=false;}
+  }
   async function loadJobs() {
     const {selected,identity}=state();if(!selected||!identity||!manager()||!$('#assistant-jobs'))return;
     const id=selected, actorId=identity.id; jobsFor=id;
     try { const data=await ctx.api('assistant?taskId='+encodeURIComponent(id));if(state().selected!==id||state().identity?.id!==actorId||!$('#assistant-jobs'))return;
-      $('#assistant-jobs').innerHTML=data.jobs.map(job=>`<article class="ai-result"><small>${ctx.date(job.createdAt,true)} · ${({pending:'В очереди',running:'Ассистент работает',completed:'Ответ подготовлен',failed:'Требуется повторный запрос'})[job.status]}</small><h4>${esc(job.question)}</h4>${job.stale?'<p class="message">Карточка изменилась во время консультации. Сверь ответ с новыми фактами.</p>':''}<p>${esc(job.text||job.error||'Можно продолжать работать с доской.')}</p>${(job.references||[]).map(ref=>`<blockquote>${esc(ref.quote)}<small>Источник: ${esc(ref.sourceId)}</small></blockquote>`).join('')}</article>`).join('');
-    } catch(error) {if($('#assistant-jobs'))$('#assistant-jobs').textContent=error.message;}
+      const box=$('#assistant-jobs'),signature=JSON.stringify(data.jobs);if(jobViews.get(box)===signature)return;
+      box.innerHTML=data.jobs.map(job=>`<article class="ai-result"><small>${ctx.date(job.createdAt,true)} · ${({pending:'В очереди',running:'Ассистент работает',completed:'Ответ подготовлен',failed:'Требуется повторный запрос'})[job.status]}</small><h4>${esc(job.question)}</h4>${job.stale?'<p class="message">В задаче появились новые сведения. Сверь ответ с актуальной памятью или задай новый вопрос.</p>':''}<p>${esc(job.text||job.error||'Можно продолжать работать с доской.')}</p>${(job.references||[]).map(ref=>`<blockquote>${esc(ref.quote)}<small>Цитата из сообщения по задаче</small>${sourceReader(ref.sourceId,ref.version)}</blockquote>`).join('')}</article>`).join('');
+      jobViews.set(box,signature);
+    } catch(error) {if(state().selected===id&&state().identity?.id===actorId&&$('#assistant-jobs')){jobViews.delete($('#assistant-jobs'));$('#assistant-jobs').textContent=error.message;}}
   }
   async function checkDetail() {
     const {selected,identity,memory}=state();if(!selected||!identity||!memory||ctx.busy()||document.hidden||!$('#task-dialog').open)return;
@@ -164,6 +196,8 @@ export function installPrototype(ctx) {
   $('#task-dialog').addEventListener('click',event=>{
     if(ctx.busy())return;const button=event.target.closest('button');if(!button)return;const task=selectedTask();if(!task)return;
     if(button.hasAttribute('data-edit-task'))taskEditor(task);
+    if(button.id==='preview-context')previewContext(button);
+    if(button.dataset.sourceOpen)readSource(button);
     if(button.id==='reload-detail')reloadDetail();
     if(button.hasAttribute('data-new-phase'))phaseEditor();
     if(button.dataset.editPhase)phaseEditor(task.phases.find(p=>p.id===button.dataset.editPhase));

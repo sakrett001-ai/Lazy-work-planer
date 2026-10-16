@@ -13,9 +13,9 @@ test('Рабочий прототип в DOM: постановка с потер
   const errors=[],console=new VirtualConsole();console.on('jsdomError',e=>errors.push(e.message));
   const dom=new JSDOM(readFileSync(new URL('../dist/pilot.html',import.meta.url),'utf8'),{url:origin+'/assistant/workspace',pretendToBeVisual:true,virtualConsole:console}),w=dom.window,d=w.document;
   w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
-  const previous=Object.fromEntries(['window','document','fetch','setInterval'].map(k=>[k,globalThis[k]])),timers=[],requests=[];
+  const previous=Object.fromEntries(['window','document','fetch','setInterval'].map(k=>[k,globalThis[k]])),timers=[],requests=[],intervals=[];
   let cookie='',lose=true;
-  Object.assign(globalThis,{window:w,document:d,setInterval(fn,ms){const t=previous.setInterval(fn,ms);t.unref();timers.push(t);return t;},async fetch(url,options={}){
+  Object.assign(globalThis,{window:w,document:d,setInterval(fn,ms){const t=previous.setInterval(fn,ms);t.unref();timers.push(t);intervals.push({fn,ms});return t;},async fetch(url,options={}){
     const h=new Headers(options.headers);if(cookie)h.set('cookie',cookie);if(options.method==='POST')h.set('origin',origin);
     const r=await handleDashboardRequest(new Request(url,{...options,headers:h}));if(r.headers.has('set-cookie'))cookie=r.headers.get('set-cookie').split(';')[0];
     if(new URL(url).pathname.endsWith('/task-create')){requests.push(JSON.parse(options.body));if(lose&&r.ok){lose=false;throw new Error('Lost response');}}
@@ -42,13 +42,29 @@ test('Рабочий прототип в DOM: постановка с потер
     await wait(()=>$('.phase-item')?.textContent.includes('исходные данные')&&!$('#logout').disabled);
     assert.equal($('#task-content progress').max,1);click('#close-dialog');click('[data-view="gantt"]');assert.ok($('.gantt-row')?.textContent.includes('исходные данные'));
     click('[data-view="board"]');click('[data-task]');await wait(()=>$('#message-form'));
-    $('#manager-message').value='Уточни готовый результат и необходимые данные.';$('#message-form').elements.requestUpdate.checked=true;submit('#message-form');
+    const longMessage='Уточни готовый результат и необходимые данные. '+'Дополнительное пояснение. '.repeat(90)+'В конце: <img src=x onerror=alert(1)> Исходные данные НЕ получены.';
+    $('#manager-message').value=longMessage;$('#message-form').elements.requestUpdate.checked=true;submit('#message-form');
     await wait(()=>$('.bubble')?.textContent.includes('Уточни готовый результат')&&!$('#logout').disabled);
+    click('#preview-context');await wait(()=>$('#context-preview-content .context-source'));
+    click('#context-preview-content [data-source-open]');await wait(()=>$('#context-preview-content .source-page'));
+    click('#context-preview-content [data-source-open]');await wait(()=>!$('#context-preview-content [data-source-open]'));
+    assert.ok($('#context-preview-content').textContent.includes('Исходные данные НЕ получены.'));assert.equal($('#context-preview-content img'),null);
+    const proto=await import('../agent/lib/prototype.ts'),actor=store.readState().employees[0];
+    const job=proto.createAssistantJob({requestId:crypto.randomUUID(),taskId,expectedVersion:proto.versionOf(store.readState().tasks[0]),question:'Что известно?'},actor,true);
+    proto.claimAssistantJob(job.jobId);const jobContext={session:{auth:{current:{principalId:actor.id,attributes:{webJobId:job.jobId}}}}};
+    proto.readAssistantHistory(jobContext,taskId,{});
+    proto.finishAssistantJob(jobContext,{text:'Нужно уточнить получение данных.',references:[{sourceId:store.readState().sources[0].id,quote:'Исходные данные НЕ получены.'}]});
+    click('#close-dialog');click('[data-task]');await wait(()=>$('#assistant-jobs [data-source-open]'));
+    click('#assistant-jobs [data-source-open]');await wait(()=>$('#assistant-jobs .source-page'));
+    const pageBefore=$('#assistant-jobs .source-page');intervals.find(t=>t.ms===6000).fn();await new Promise(r=>setTimeout(r,20));
+    assert.equal($('#assistant-jobs .source-page'),pageBefore,'Опрос не сбрасывает открытый источник');
+    click('#assistant-jobs [data-source-open]');await wait(()=>!$('#assistant-jobs [data-source-open]'));
+    assert.ok($('#assistant-jobs .source-pages').textContent.includes('Исходные данные НЕ получены.'));assert.equal($('#task-content img'),null);
     click('[data-template="request"]');await wait(()=>$('[data-edit-draft]')&&!$('#logout').disabled);click('[data-edit-draft]');
     form=$('#draft-editor');form.elements.body.value='Готовый текст запроса. <script>bad()</script>';form.elements.status.value='approved';submit('#draft-editor');
     await wait(()=>$('.draft')?.textContent.includes('Текст согласован')&&!$('#logout').disabled);assert.equal(store.readState().decisionDrafts[0].body,'Готовый текст запроса. <script>bad()</script>');
     await logout();await login('a');assert.equal($('#new-task').hidden,true);assert.equal($('#team').hidden,true);
-    click('[data-task]');await wait(()=>$('#report-form'));assert.ok($('.bubble').textContent.includes('Уточни готовый результат'));assert.equal($('[data-edit-draft]'),null);
+    click('[data-task]');await wait(()=>$('#report-form'));assert.ok($('.bubble').textContent.includes('Уточни готовый результат'));assert.equal($('[data-edit-draft]'),null);assert.equal($('#preview-context'),null);
     click('[data-phase-toggle]');await wait(()=>$('#task-content progress')?.value===1&&!$('#logout').disabled);
     $('#report-text').value='Работа выполнена, результат готов к проверке.';submit('#report-form');await wait(()=>store.readState().tasks[0].status==='review'&&!$('#logout').disabled);
     await logout();await login('boss');click('[data-task]');await wait(()=>$('[data-decision="accept"]'));

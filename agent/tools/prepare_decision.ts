@@ -2,7 +2,7 @@ import { defineTool } from 'eve/tools';
 import { z } from 'zod';
 import { currentEmployee, updateState } from '../lib/store';
 import { saveDecisionDraft } from '../lib/decisions';
-import { webJobFor } from '../lib/prototype';
+import { activeWebJob, verifyWebEvidence } from '../lib/prototype';
 
 export default defineTool({
   description:'Сохранить подготовленные моделью варианты решения и редактируемый черновик письма, плана или проверки. Только руководителю. Не отправляет сообщения и не меняет задачу или утверждённый срок.',
@@ -17,11 +17,11 @@ export default defineTool({
   }),
   execute(input, ctx) {
     const actor=currentEmployee(ctx);
-    const job = ctx.session.auth.current?.attributes?.webJobId ? webJobFor(ctx) : null;
+    const job = ctx.session.auth.current?.attributes?.webJobId ? activeWebJob(ctx, input.taskId) : null;
     if (job && job.taskId !== input.taskId) throw new Error('Черновик должен относиться к задаче текущей консультации.');
     const callId=job ? `${job.id}:draft:${input.kind}` : `${actor.id}:${ctx.callId}`;
     let draft:ReturnType<typeof saveDecisionDraft>['draft']|undefined;
-    updateState(state => { const result=saveDecisionDraft(state, actor, input, callId, new Date().toISOString()); draft=result.draft; return result.state; });
+    updateState(state => { if (job) verifyWebEvidence(ctx, state, input.references); const result=saveDecisionDraft(state, actor, input, callId, new Date().toISOString()); draft=result.draft; return result.state; });
     return { status:'draft', delivered:false, taskChanged:false, draft };
   },
 });
