@@ -9,6 +9,9 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "pilot:import": "node scripts/import-pilot.mjs",
+    "pilot:serve": "node scripts/pilot-server.mjs",
+    "prototype": "node scripts/prototype.mjs",
+    "pilot:invite": "node scripts/pilot-invite.mjs",
     "memory:backup": "node scripts/backup-state.mjs",
     "telegram:register": "node scripts/register-webhook.mjs",
     "build": "eve build",

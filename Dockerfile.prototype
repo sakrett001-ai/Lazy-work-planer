@@ -1,0 +1,12 @@
+FROM node:24-bookworm-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY agent ./agent
+COPY dist ./dist
+COPY scripts ./scripts
+RUN mkdir /data && chown node:node /data
+USER node
+ENV ASSISTANT_HOST=0.0.0.0 ASSISTANT_PORT=8787 ASSISTANT_DATA_DIR=/data
+EXPOSE 8787
+CMD ["node", "scripts/prototype.mjs"]

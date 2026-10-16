@@ -68,6 +68,9 @@ export function progress(task) {
 }
 export function createWorkspace(now = new Date()) {
   const state = initialState(), today = dayKey(now), d = offset => shiftDay(today, offset);
+  // Starting the demo before 09:15 must not create a future reply that makes
+  // a real current message look older than the seeded state.
+  const past = at => new Date(Math.min(Date.parse(at), new Date(now).getTime())).toISOString();
   state.version = 2; state.createdAt = new Date(now).toISOString(); state.drafts = {}; state.chat = [];
   state.settings = { ...state.settings, motion: true, achievements: true, autoArchive: true };
   state.employees = [
@@ -88,7 +91,7 @@ export function createWorkspace(now = new Date()) {
   ];
   state.tasks.forEach((t, i) => {
     Object.assign(t, { start: d(-4), dueTime: '18:00' }, metadata[i]);
-    t.lastReply = d(t.contact === 'no_reply' ? -3 : 0) + 'T09:15:00+03:00';
+    t.lastReply = past(d(t.contact === 'no_reply' ? -3 : 0) + 'T09:15:00+03:00');
     const source = state.sources.find(s => s.id === t.latestSourceId);
     if (source) { source.receivedAt = t.lastReply; source.text = t.summary; }
   });
@@ -104,13 +107,13 @@ export function createWorkspace(now = new Date()) {
     ] },
     { id: 'П-109', title: 'Обновить календарь регулярных отчётов', employeeId: 'irina', department: 'accounts', project: 'Регулярная работа', due: d(6), dueTime: '18:00', status: 'planned', summary: 'Сверить периодичность отчётов и назначить контрольные даты.', contact: 'answered', start: d(2) }
   );
-  state.events = state.events.map(e => ({ ...e, at: d(0) + 'T09:15:00+03:00' }));
+  state.events = state.events.map(e => ({ ...e, at: past(d(0) + 'T09:15:00+03:00') }));
   state.notifications = [
     { id: 'notif:seed:102', at: d(0) + 'T09:16:00+03:00', to: 'manager', recipientName: 'Руководитель', fromEmployeeId: 'elena', taskId: 'П-102', kind: 'blocker_escalation', severity: 'coral', title: 'Препятствие по П-102 (Елена)', text: 'Елена сообщила о проблеме: «Нет данных о численности и ФОТ от двух подразделений». Требуется содействие руководителя.', channel: 'dashboard_and_telegram' },
     { id: 'notif:seed:103', at: d(0) + 'T09:18:00+03:00', to: 'manager', recipientName: 'Руководитель', fromEmployeeId: 'dmitry', taskId: 'П-103', kind: 'deadline_escalation', severity: 'amber', title: 'Запрос переноса срока П-103 (Дмитрий)', text: `Дмитрий просит перенести согласование ТЗ на ${shortDate(d(3), true)} из-за дополнительных требований.`, channel: 'dashboard_and_telegram' },
     { id: 'notif:seed:105', at: d(0) + 'T09:20:00+03:00', to: 'anna', recipientName: 'Анна', taskId: 'П-105', kind: 'check_in', severity: 'violet', title: 'Запрос статуса у Анны (П-105)', text: 'Анна, подскажите актуальный статус по реестру рисков (П-105): что уже готово и есть ли препятствия?', channel: 'dashboard', delivery: 'prepared' }
   ];
-  state.notifications = state.notifications.map(n => ({ ...n, delivery: 'prepared', channel: 'dashboard' }));
+  state.notifications = state.notifications.map(n => ({ ...n, at: past(n.at), delivery: 'prepared', channel: 'dashboard' }));
   state.graphRuns = [];
   return state;
 }

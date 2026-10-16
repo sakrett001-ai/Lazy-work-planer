@@ -1,10 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState } from '../dist/fixtures.js';
+import { applyReport } from '../dist/domain.js';
 import { createWorkspace, migrateWorkspace, addTask, editTask, deadline, dueInstant, selectTasks, changeTask, setPhase, savePhase, makeDraft, proposal, calendarDays, achievements, applyScenario, dayKey } from '../dist/workspace-model.js';
 const NOW='2026-10-14T12:00:00+03:00';
 const seed=()=>createWorkspace(NOW);
 const task=(s,id)=>s.tasks.find(t=>t.id===id);
+test('Запуск демо ночью и утром не превращает текущий ответ в запоздалый',()=>{
+ for (const now of ['2026-10-15T21:05:00Z','2026-10-16T05:30:00Z','2026-10-16T09:00:00Z']) {
+  const state=createWorkspace(now), t=task(state,'П-101'), text='Препятствие не устранено, нужна помощь.';
+  const source={id:'current-reply',taskId:t.id,employeeId:t.employeeId,text,occurredAt:now,receivedAt:now};
+  const next=applyReport(state,{taskId:t.id,kind:'blocked',summary:text,quote:text},state.employees.find(p=>p.id===t.employeeId),source);
+  assert.equal(task(next,t.id).status,'blocked');assert.equal(task(next,t.id).latestSourceId,source.id);
+  assert.ok(state.sources.every(s=>Date.parse(s.receivedAt)<=Date.parse(now)));
+  assert.ok([...state.events,...state.notifications].every(e=>Date.parse(e.at)<=Date.parse(now)));
+ }
+});
 test('Поручение без протокола и срока не получает выдуманные реквизиты',()=>{
  const {state:s,task:t}=addTask(seed(),{title:'Моя задача',employeeId:'manager'},NOW);
  assert.equal(t.protocol,undefined);assert.equal(t.due,null);assert.equal(deadline(t,NOW).kind,'none');
