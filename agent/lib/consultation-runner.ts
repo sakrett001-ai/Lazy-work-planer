@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { readState, currentEmployee } from './store.ts';
 import { contextVersion, verifyReadReferences, type EvidenceRead } from './assistant-memory.ts';
 import { activeWebJob, claimAssistantJob, failAssistantJob, finishAssistantJob, readAssistantContext, readAssistantSource, recordExecution } from './prototype.ts';
-import { resolveRoute, type RoleId } from './llm-config.ts';
+import { resolveRoute, aiEnabledOnServer, type RoleId } from './llm-config.ts';
 import { createModelClient, ProviderError } from './llm-provider.ts';
 
 const references = z.array(z.object({ sourceId: z.string().min(1).max(150), quote: z.string().trim().min(1).max(1500) }).strict()).max(8);
@@ -46,7 +46,7 @@ export function createConsultationRunner({ complete = createModelClient() } = {}
       // Resolve all credentials once in memory. Never serialize them into a job.
       const routes = execution.routes.map(route => ({ route, ...resolveRoute(route) }));
       const assertCurrent = () => {
-        if (process.env.ASSISTANT_AI_ENABLED !== 'true') throw new ProviderError('disabled');
+        if (!aiEnabledOnServer()) throw new ProviderError('disabled');
         controller.signal.throwIfAborted(); activeWebJob(ctx);
         if (contextVersion(readState(), currentEmployee(ctx), job.taskId) !== job.contextVersion) throw new ProviderError('context_changed');
       };

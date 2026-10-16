@@ -15,7 +15,7 @@ export default defineChannel({
   turnPolicy: 'queue',
   routes: [
     ...['/assistant/workspace', '/assistant/pilot.html', '/assistant/pilot.js', '/assistant/prototype-ui.js', '/assistant/pilot.css', '/assistant/prototype.css', '/assistant/icons.js', '/assistant/api/session', '/assistant/api/tasks', '/assistant/api/memory', '/assistant/api/context', '/assistant/api/source', '/assistant/api/assistant', '/assistant/api/llm-settings'].map(path => GET(path, serve)),
-    ...['login', 'logout', 'report', 'decision', 'invite', 'llm-settings', ...prototypePaths].map(path => POST(`/assistant/api/${path}`, serve)),
+    ...['login', 'logout', 'report', 'decision', 'invite', 'llm-settings', 'llm-connection', ...prototypePaths].map(path => POST(`/assistant/api/${path}`, serve)),
     POST('/assistant/api/assistant', async request => {
       const response = await serve(request);
       if (!response.ok) return response;

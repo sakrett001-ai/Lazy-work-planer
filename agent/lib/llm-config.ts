@@ -1,7 +1,9 @@
 import { readFileSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { readState, updateState, type Employee } from './store.ts';
 import { digest, webTables, WebError } from './web-auth.ts';
+import { openSecret, sealSecret } from './llm-secrets.ts';
 
 export const roleIds = ['coordinator', 'analyst', 'reviewer'] as const;
 export type RoleId = typeof roleIds[number];
@@ -23,7 +25,8 @@ const catalogSchema = z.object({ connections: z.array(connectionSchema).max(20) 
     if (new Set(c.models).size !== c.models.length || (c.scope && c.provider !== 'gigachat')) ctx.addIssue({ code: 'custom', message: 'Invalid connection options' });
   }
 });
-export type Connection = z.infer<typeof connectionSchema>;
+const managedSchema = connectionSchema.omit({ credentialEnv: true }).extend({ credentialId: z.string(), revision: z.uuid() });
+export type Connection = z.infer<typeof connectionSchema> | z.infer<typeof managedSchema>;
 const assignment = z.object({ enabled: z.boolean(), connectionId: z.string().max(64).nullable(), model: name.nullable() }).strict();
 const rolesSchema = z.object({ coordinator: assignment, analyst: assignment, reviewer: assignment }).strict();
 export type RoleAssignments = z.infer<typeof rolesSchema>;
@@ -34,14 +37,24 @@ export type Execution = { configurationVersion: string; routes: RoleRoute[]; ste
 // Endpoints are fixed in adapters: neither the browser nor a model can redirect a key.
 export function loadConnections(): Connection[] {
   const path = process.env.ASSISTANT_LLM_CONFIG;
-  if (!path) return [];
   try {
-    if (statSync(path).size > 65536) throw new Error('Catalog too large');
-    return catalogSchema.parse(JSON.parse(readFileSync(path, 'utf8'))).connections;
+    if (path && statSync(path).size > 65536) throw new Error('Catalog too large');
+    const configured = path ? catalogSchema.parse(JSON.parse(readFileSync(path, 'utf8'))).connections : [];
+    const saved = (tables().prepare('SELECT data FROM llm_connections ORDER BY rowid').all() as {data:string}[]).map(row => managedSchema.parse(JSON.parse(row.data)));
+    const all = [...configured, ...saved];
+    if (new Set(all.map(c => c.id)).size !== all.length) throw new Error('Duplicate connection ID');
+    return all;
   } catch { throw new WebError(503, 'Не удалось прочитать настройки подключений ИИ на сервере.'); }
 }
+const identityFor = (connection: z.infer<typeof managedSchema>) => JSON.stringify([connection.id, connection.provider, connection.revision]);
 export function credential(connection: Connection): string {
-  const value = process.env[connection.credentialEnv]?.trim();
+  let value: string|undefined;
+  if ('credentialId' in connection) {
+    try {
+      const row = tables().prepare('SELECT secret FROM llm_connections WHERE id=?').get(connection.credentialId) as {secret:string}|undefined;
+      if (row) value = openSecret(row.secret, identityFor(connection));
+    } catch { throw new WebError(503, 'Не удалось открыть сохранённый ключ подключения. Проверьте хранилище ключей сервера.'); }
+  } else value = process.env[connection.credentialEnv]?.trim();
   if (!value || value.length > 8192 || /\s/.test(value)) throw new WebError(503, 'Ключ выбранного подключения не настроен на сервере.');
   return value;
 }
@@ -49,6 +62,7 @@ function ready(connection: Connection) { try { credential(connection); return tr
 function tables() {
   const db = webTables();
   db.exec('CREATE TABLE IF NOT EXISTS llm_settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);');
+  db.exec('CREATE TABLE IF NOT EXISTS llm_connections (id TEXT PRIMARY KEY, data TEXT NOT NULL, secret TEXT NOT NULL);');
   return db;
 }
 function assignments(): RoleAssignments {
@@ -69,20 +83,68 @@ function routesFor(roles: RoleAssignments, connections: Connection[]): RoleRoute
   });
 }
 export function executionPlan(): Execution {
-  if (process.env.ASSISTANT_AI_ENABLED !== 'true') throw new WebError(503, 'ИИ выключен в настройках сервера.');
+  if (!aiEnabledOnServer()) throw new WebError(503, 'ИИ выключен в настройках сервера.');
   const connections = loadConnections(), roles = assignments();
   if (!roles.analyst.enabled) throw new WebError(503, 'Включите аналитика в разделе «Модели и роли».');
   return { configurationVersion: version(roles, connections), routes: routesFor(roles, connections), steps: [] };
 }
 export function assistantAvailable() { try { executionPlan(); return true; } catch { return false; } }
+// With no environment override, a manager explicitly enables roles in the UI.
+// No role is enabled in a new database. The administrator can still force AI off.
+export function aiEnabledOnServer() { const value = process.env.ASSISTANT_AI_ENABLED; return value === undefined || value === '' || value === 'true'; }
 export function roleSettings(actor: Employee) {
   requireManager(actor);
   const connections = loadConnections(), roles = assignments();
   return {
     version: version(roles, connections), roles, roleLabels,
-    enabledOnServer: process.env.ASSISTANT_AI_ENABLED === 'true', available: assistantAvailable(),
-    connections: connections.map(c => ({ id: c.id, label: c.label, provider: c.provider, providerLabel: providerLabels[c.provider], models: c.models, ready: ready(c) })),
+    enabledOnServer: aiEnabledOnServer(), available: assistantAvailable(), providerLabels,
+    connections: connections.map(c => ({ id: c.id, label: c.label, provider: c.provider, providerLabel: providerLabels[c.provider], models: c.models, scope: c.scope, ready: ready(c), editable: 'credentialId' in c })),
   };
+}
+export function saveConnection(raw: unknown, actor: Employee) {
+  requireManager(actor);
+  const input = z.object({ requestId: z.uuid(), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/), connectionId: z.string().max(64).nullable(),
+    label: connectionSchema.shape.label, provider: connectionSchema.shape.provider, models: connectionSchema.shape.models,
+    scope: connectionSchema.shape.scope, apiKey: z.string().trim().max(8192).refine(value => !/\s/.test(value)),
+  }).strict().parse(raw);
+  if (new Set(input.models).size !== input.models.length || input.models.some(m => m === 'REPLACE_WITH_MODEL_ID')) throw new WebError(400, 'Укажите реальные ID моделей без повторов.');
+  if (input.scope && input.provider !== 'gigachat') throw new WebError(400, 'Scope применяется только к GigaChat.');
+  const operation = `llm-connection:${actor.id}:${input.requestId}`, hash = digest(JSON.stringify(input));
+  let result: {ok:boolean;duplicate:boolean;connectionId:string}|undefined;
+  tables();
+  updateState(state => {
+    requireManager(actor);
+    const db = tables(), prior = db.prepare('SELECT request_hash,response FROM web_operations WHERE id=?').get(operation) as {request_hash:string;response:string}|undefined;
+    if (prior) {
+      if (prior.request_hash !== hash) throw new WebError(409, 'Этот запрос уже использован для других настроек подключения.');
+      result = { ...JSON.parse(prior.response), duplicate: true }; return state;
+    }
+    const all = loadConnections(), old = all.find(c => c.id === input.connectionId);
+    if (input.expectedVersion !== version(assignments(), all)) throw new WebError(409, 'Подключения изменились. Откройте «Модели и роли» снова.');
+    if (input.connectionId && (!old || !('credentialId' in old))) throw new WebError(400, 'Подключение из файла изменяется в настройках сервера. Можно добавить отдельное подключение здесь.');
+    if (!old && all.length >= 20) throw new WebError(400, 'Доступно до 20 подключений.');
+    if (old && old.provider !== input.provider) throw new WebError(400, 'Для другого провайдера добавьте отдельное подключение.');
+    if (!old && !input.apiKey) throw new WebError(400, 'Вставьте API-ключ выбранного провайдера.');
+    const id = old?.id || `ui-${randomUUID()}`;
+    const connection = managedSchema.parse({ id, label: input.label, provider: input.provider, models: input.models, scope: input.scope,
+      credentialId: id, revision: !input.apiKey && old && 'revision' in old ? old.revision : randomUUID(), maxOutputTokens: old?.maxOutputTokens || 2048 });
+    let sealed: string;
+    try {
+      if (input.apiKey) {
+        const count = (db.prepare('SELECT count(*) AS n FROM llm_connections').get() as {n:number}).n;
+        sealed = sealSecret(input.apiKey, identityFor(connection), count === 0);
+      } else {
+        credential(connection); // Verify the retained key before committing metadata.
+        sealed = (db.prepare('SELECT secret FROM llm_connections WHERE id=?').get(id) as {secret:string}).secret;
+      }
+    } catch { throw new WebError(503, 'Не удалось сохранить ключ на сервере. Проверьте доступ к хранилищу ключей.'); }
+    db.prepare('INSERT INTO llm_connections VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,secret=excluded.secret').run(id, JSON.stringify(connection), sealed);
+    result = { ok: true, duplicate: false, connectionId: id };
+    // Receipts contain only public metadata and a request digest, never plaintext.
+    db.prepare('INSERT INTO web_operations VALUES (?,?,?)').run(operation, hash, JSON.stringify(result));
+    return state;
+  });
+  return result!;
 }
 export function saveRoleSettings(raw: unknown, actor: Employee) {
   requireManager(actor);
