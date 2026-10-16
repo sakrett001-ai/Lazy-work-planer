@@ -1,0 +1,45 @@
+{
+  "connections": [
+    {
+      "id": "openai-main",
+      "label": "OpenAI · основной",
+      "provider": "openai",
+      "credentialEnv": "ASSISTANT_LLM_KEY_OPENAI",
+      "models": ["REPLACE_WITH_MODEL_ID"],
+      "maxOutputTokens": 2048
+    },
+    {
+      "id": "vsegpt-main",
+      "label": "VseGPT · основной",
+      "provider": "vsegpt",
+      "credentialEnv": "ASSISTANT_LLM_KEY_VSEGPT",
+      "models": ["REPLACE_WITH_MODEL_ID"],
+      "maxOutputTokens": 2048
+    },
+    {
+      "id": "claude-main",
+      "label": "Claude · основной",
+      "provider": "anthropic",
+      "credentialEnv": "ASSISTANT_LLM_KEY_CLAUDE",
+      "models": ["REPLACE_WITH_MODEL_ID"],
+      "maxOutputTokens": 2048
+    },
+    {
+      "id": "gigachat-main",
+      "label": "GigaChat · основной",
+      "provider": "gigachat",
+      "credentialEnv": "ASSISTANT_LLM_KEY_GIGACHAT",
+      "scope": "GIGACHAT_API_PERS",
+      "models": ["REPLACE_WITH_MODEL_ID"],
+      "maxOutputTokens": 2048
+    },
+    {
+      "id": "openrouter-main",
+      "label": "OpenRouter · основной",
+      "provider": "openrouter",
+      "credentialEnv": "ASSISTANT_LLM_KEY_OPENROUTER",
+      "models": ["REPLACE_WITH_MODEL_ID"],
+      "maxOutputTokens": 2048
+    }
+  ]
+}

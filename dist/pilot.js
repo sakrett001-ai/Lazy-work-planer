@@ -29,7 +29,7 @@ async function api(path, body) {
 }
 function setBusy(value) {
   busy=value;
-  document.querySelectorAll('#task-dialog button,#editor-dialog button,#login-form button,#logout,#new-task,#team').forEach(el=>{el.disabled=value||el.dataset.unavailable==='true';});
+  document.querySelectorAll('#task-dialog button,#editor-dialog button,#login-form button,#logout,#new-task,#team,#llm-settings').forEach(el=>{el.disabled=value||el.dataset.unavailable==='true';});
 }
 function renderBoard() {
   if (!snapshot || !identity) return;

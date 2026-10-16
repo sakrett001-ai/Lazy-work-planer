@@ -8,3 +8,4 @@ node_modules
 .output
 artifacts
 tests
+config/*.local.json

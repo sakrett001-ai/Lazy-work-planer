@@ -15,11 +15,13 @@
     "pilot:invite": "node scripts/pilot-invite.mjs",
     "memory:backup": "node scripts/backup-state.mjs",
     "telegram:register": "node scripts/register-webhook.mjs",
-    "build": "eve build",
-    "deploy": "eve deploy",
-    "dev": "eve dev",
+    "build": "npm run typecheck",
+    "dev": "node --watch scripts/prototype.mjs",
     "eval": "eve eval",
-    "start": "eve start",
+    "start": "node scripts/pilot-server.mjs",
+    "eve:build": "eve build",
+    "eve:dev": "eve dev",
+    "eve:start": "eve start",
     "typecheck": "tsc"
   },
   "dependencies": {

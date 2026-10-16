@@ -10,6 +10,7 @@ Lazy Work Planer is a Russian-language manager assistant prototype. Read `README
 - Keep real tokens, working data, databases and local runtime directories out of version control. `.env.example` contains empty placeholders only.
 - `npm test` and `npm run typecheck` are the available local checks. Server build and live-provider validation have separate status in the README.
 - Keep the shared dashboard handlers free of model and transport side effects. Browser identities come from server sessions; never put ASSISTANT_ADMIN_TOKEN in frontend code. Preserve idempotency, source provenance and task-version checks for writes. Follow `docs/PILOT.md` for local entry points and `docs/ROADMAP.md` for stage boundaries.
+- The primary runtime is now the persistent Node server (`prototype`, `start`, `dev`); `build` typechecks it. Web consultations use `agent/lib/llm-config.ts`, `llm-provider.ts` and `consultation-runner.ts`, described in `docs/LLM_PROVIDERS.md`. Keep provider endpoints server-owned, credentials out of role/job payloads, and per-role source verification intact. The legacy eve runtime has explicit `eve:*` scripts; changing `agent/agent.ts` does not change the web role assignments.
 
 This project uses the eve framework: an agent is a directory of files under `agent/`, and eve compiles and runs it.
 

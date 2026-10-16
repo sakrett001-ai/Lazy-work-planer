@@ -11,3 +11,12 @@
 .source-reader{margin-top:10px;font-size:.9rem}
 .source-page{padding:10px 12px;margin:8px 0;border-left:2px solid #75d8ff;background:rgba(117,216,255,.05);border-radius:0 8px 8px 0}
 .source-page small{color:var(--muted,#a8b2c8)}
+/* Provider connections and per-role assignments share the workspace palette. */
+.connections-list{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}
+.connection-chip{font-size:12px;border:1px solid #3c3858;border-radius:10px;padding:8px 10px;color:#a8a3c5;overflow-wrap:anywhere}
+.connection-chip.ready{border-color:#44dac957;color:#b9f3e9}
+.role-settings{border:1px solid #aa82ff3d;border-radius:14px;padding:16px;margin:16px 0;background:linear-gradient(135deg,#aa82ff08,transparent)}
+.role-settings legend{padding:0 8px;color:#ddcaff;font-weight:650}
+.role-settings select{min-width:0;max-width:100%}
+.role-trace{margin:10px 0;font-size:13px;overflow-wrap:anywhere}
+.role-trace li{margin:7px 0}
