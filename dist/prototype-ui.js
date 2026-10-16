@@ -103,7 +103,7 @@ export function installPrototype(ctx) {
     finally {ctx.setBusy(false);}
   }
   function openEditor(title,markup) {
-    $('#editor-title').textContent=title;$('#editor-content').innerHTML=markup;message('#editor-message','');$('#editor-dialog').showModal();
+    $('#editor-title').textContent=title;$('#editor-content').innerHTML=markup;message('#editor-message','');if(!$('#editor-dialog').open)$('#editor-dialog').showModal();
   }
   function input(name,label,value='',type='text',extra='') { return `<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`; }
   function taskEditor(task=null) {
@@ -189,13 +189,54 @@ export function installPrototype(ctx) {
     try {
       const settings=await ctx.api('llm-settings');
       if(state().identity?.id!==actorId||!manager())return;
+      renderModels(settings);
+    }catch(error){message('#workspace-message',error.message);}finally{ctx.setBusy(false);}
+  }
+  function renderModels(settings) {
       llmSettings=settings;
-      openEditor('Модели и роли',`<p class="report-note">Для каждой роли выбери подключение и модель. Можно использовать разные ключи одного провайдера. Для начала достаточно аналитика.</p>
-        <div class="connections-list">${settings.connections.map(c=>`<span class="connection-chip ${c.ready?'ready':''}"><strong>${esc(c.label)}</strong> · ${esc(c.providerLabel)} · ${c.ready?'ключ настроен':'нет ключа'}</span>`).join('')||'<p class="message">Подключений пока нет. Добавь их в настройки сервера, затем открой это окно снова.</p>'}</div>
+      openEditor('Модели и роли',`<p class="report-note">Сначала добавь подключение с ключом, затем выбери его для нужных ролей. Для начала достаточно аналитика.</p>
+        <div class="section-heading"><h3>Подключения</h3>${smallButton('id="add-connection"','+ Добавить подключение')}</div>
+        <div class="connections-list">${settings.connections.map(c=>`<div class="connection-chip ${c.ready?'ready':''}"><strong>${esc(c.label)}</strong> · ${esc(c.providerLabel)} · ${c.ready?'ключ сохранён':'ключ недоступен'}${c.editable?`<button class="quiet" type="button" data-edit-connection="${esc(c.id)}">Изменить / заменить ключ</button>`:'<small>Задано на сервере</small>'}</div>`).join('')||'<p class="message">Подключений пока нет. Нажми «Добавить подключение» и вставь свой API-ключ.</p>'}</div><div id="connection-editor-host"></div>
         ${settings.enabledOnServer?'':'<p class="message">Вызовы ИИ выключены на сервере. Назначения можно сохранить заранее.</p>'}
         <form id="llm-editor">${Object.entries(roleNames).map(([id,label])=>{const role=settings.roles[id];return `<fieldset class="role-settings" data-role="${id}"><legend>${label}</legend><p class="report-note">${roleDescriptions[id]}</p><label class="check-label"><input name="${id}-enabled" type="checkbox" ${role.enabled?'checked':''}> Включена</label><div class="form-grid"><label>Подключение<select name="${id}-connection" data-llm-connection="${id}"><option value="">Выбери подключение</option>${settings.connections.map(c=>`<option value="${esc(c.id)}" ${c.id===role.connectionId?'selected':''}>${esc(c.label)} · ${esc(c.providerLabel)}${c.ready?'':' · нет ключа'}</option>`).join('')}</select></label><label>Модель<select name="${id}-model">${modelOptions(role.connectionId,role.model)}</select></label></div></fieldset>`;}).join('')}
         <p class="report-note">Изменения применятся к новым вопросам. Если подключение недоступно, ответ остановится с ошибкой. Настроенный ключ ещё не означает, что соединение проверено.</p><button type="submit" class="primary">Сохранить назначения</button></form>`);
-    }catch(error){message('#workspace-message',error.message);}finally{ctx.setBusy(false);}
+  }
+  function connectionEditor(id=null) {
+    if(!llmSettings||ctx.busy())return;
+    const c=llmSettings.connections.find(item=>item.id===id);if(id&&!c?.editable)return;
+    $('#connection-editor-host').innerHTML=`<form id="connection-editor" class="role-settings" data-connection-id="${esc(c?.id||'')}" data-version="${esc(llmSettings.version)}" data-request-id="${crypto.randomUUID()}" autocomplete="off">
+      <h3>${c?'Изменить подключение':'Новое подключение'}</h3><div class="form-grid">${input('label','Название подключения',c?.label||'','text','required maxlength="100" placeholder="Например: VseGPT · рабочий"')}<label>Провайдер<select name="provider" required ${c?'disabled':''}><option value="">Выбери провайдера</option>${Object.entries(llmSettings.providerLabels).map(([value,label])=>`<option value="${value}" ${value===c?.provider?'selected':''}>${esc(label)}</option>`).join('')}</select></label></div>
+      <label>API-ключ ${c?'· оставь пустым, чтобы сохранить текущий':''}<input name="apiKey" type="password" ${c?'':'required'} maxlength="8192" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="${c?'Сохранённый ключ скрыт':'Вставь существующий ключ выбранного провайдера'}"></label>
+      <label>ID моделей<textarea name="models" required maxlength="8000" rows="3" placeholder="ID из кабинета провайдера, по одному на строку">${esc(c?.models.join('\n')||'')}</textarea></label><p class="report-note">Можно указать несколько моделей через запятую или с новой строки. Они появятся в выборе для ролей.</p>
+      <label id="giga-scope-field" ${c?.provider==='gigachat'?'':'hidden'}>Тип доступа GigaChat<select name="scope"><option value="GIGACHAT_API_PERS">Физическое лицо</option><option value="GIGACHAT_API_B2B" ${c?.scope==='GIGACHAT_API_B2B'?'selected':''}>ИП / организация · пакеты</option><option value="GIGACHAT_API_CORP" ${c?.scope==='GIGACHAT_API_CORP'?'selected':''}>ИП / организация · по использованию</option></select></label>
+      <p class="report-note">Ключ будет сохранён на сервере в зашифрованном виде. Сохранение не отправляет запрос к модели. Для GigaChat нужен ключ авторизации.</p><p id="connection-message" class="message" role="status"></p><div class="actions"><button type="submit" class="primary">Сохранить подключение</button>${smallButton('id="cancel-connection"','Отмена')}</div></form>`;
+    $('#connection-editor input').focus();
+  }
+  function readRoleForm() {
+    const form=$('#llm-editor');return form?Object.fromEntries(Object.keys(roleNames).map(id=>[id,{enabled:form.elements.namedItem(id+'-enabled').checked,connectionId:inputValue(form,id+'-connection')||null,model:inputValue(form,id+'-model')||null}])):null;
+  }
+  async function saveConnectionForm(form) {
+    if(ctx.busy()||!manager()||!llmSettings)return;
+    const actorId=state().identity.id,roleDraft=readRoleForm(),provider=inputValue(form,'provider');
+    const input={requestId:form.dataset.requestId,expectedVersion:form.dataset.version,connectionId:form.dataset.connectionId||null,label:inputValue(form,'label').trim(),provider,
+      apiKey:inputValue(form,'apiKey').trim(),models:[...new Set(inputValue(form,'models').split(/[,\n\r]+/).map(s=>s.trim()).filter(Boolean))],...(provider==='gigachat'?{scope:inputValue(form,'scope')}:{})};
+    const fields=[...form.querySelectorAll('input,textarea,select')].map(el=>[el,el.disabled]);fields.forEach(([el])=>el.disabled=true);
+    ctx.setBusy(true);message('#connection-message','');let saved=false;
+    try {
+      await ctx.api('llm-connection',input);saved=true;form.elements.namedItem('apiKey').value='';
+      const settings=await ctx.api('llm-settings');
+      if(state().identity?.id!==actorId||!manager())return;
+      renderModels(settings);
+      // Adding a connection must not discard role choices still being edited.
+      const roles=$('#llm-editor');for(const [id,choice] of Object.entries(roleDraft||{})){
+        roles.elements.namedItem(id+'-enabled').checked=choice.enabled;
+        roles.elements.namedItem(id+'-connection').value=choice.connectionId||'';
+        const model=roles.elements.namedItem(id+'-model');model.innerHTML=modelOptions(choice.connectionId,choice.model);model.value=choice.model||'';
+      }
+      message('#editor-message','Подключение сохранено. Выбери его для аналитика и сохрани назначения.',true);
+      await ctx.refresh();
+    }catch(error){message(saved?'#editor-message':'#connection-message',saved?'Подключение сохранено. Открой «Модели и роли» снова, чтобы обновить список.':error.message,saved);}
+    finally{input.apiKey='';fields.forEach(([el,disabled])=>el.disabled=disabled);ctx.setBusy(false);}
   }
   function executionMarkup(job) {
     if(!job.execution)return '';
@@ -215,9 +256,14 @@ export function installPrototype(ctx) {
   $('#editor-dialog').addEventListener('cancel',event=>{if(ctx.busy())event.preventDefault();});
   $('#editor-dialog').addEventListener('close',()=>{$('#editor-content').replaceChildren();draft=null;editingTask=null;editingPhase=null;llmSettings=null;});
   $('#editor-dialog').addEventListener('change',event=>{
+    if(event.target.form?.id==='connection-editor'){
+      event.target.form.dataset.requestId=crypto.randomUUID();
+      if(event.target.name==='provider')$('#giga-scope-field').hidden=event.target.value!=='gigachat';
+    }
     const role=event.target.dataset.llmConnection;if(!role||!llmSettings)return;
     const model=event.target.form.elements.namedItem(role+'-model');model.innerHTML=modelOptions(event.target.value,null);
   });
+  $('#editor-dialog').addEventListener('input',event=>{if(event.target.form?.id==='connection-editor')event.target.form.dataset.requestId=crypto.randomUUID();});
   $('#board').addEventListener('click',event=>{const pin=event.target.closest('[data-pin]'),notice=event.target.closest('[data-notice]');if(!pin&&!notice)return;
     const id=(pin||notice).dataset[pin?'pin':'notice'],task=state().snapshot.tasks.find(t=>t.id===id);if(!task)return;
     mutate(pin?'pin':'notice',pin?{taskId:id,pinned:!state().snapshot.preferences.pins.includes(id)}:{taskId:id,expectedVersion:task.version});
@@ -247,9 +293,15 @@ export function installPrototype(ctx) {
     if(form.id==='draft-editor')mutate('draft-save',{draftId:draft.id,expectedVersion:draft.version,expectedTaskVersion:draft.taskVersion,title:inputValue(form,'title'),body:inputValue(form,'body'),status:inputValue(form,'status')},{dialog});
     if(form.id==='automation-form')mutate('automation',{enabled:form.elements.enabled.checked},{dialog});
     if(form.id==='person-editor')mutate('person-create',{name:inputValue(form,'name')},{dialog});
+    if(form.id==='connection-editor')saveConnectionForm(form);
     if(form.id==='llm-editor'&&llmSettings)mutate('llm-settings',{expectedVersion:llmSettings.version,roles:Object.fromEntries(Object.keys(roleNames).map(id=>[id,{enabled:form.elements.namedItem(id+'-enabled').checked,connectionId:inputValue(form,id+'-connection')||null,model:inputValue(form,id+'-model')||null}]))},{dialog});
   });
   $('#editor-dialog').addEventListener('click',async event=>{
+    if(!ctx.busy()){
+      if(event.target.closest('#add-connection'))connectionEditor();
+      const edit=event.target.closest('[data-edit-connection]');if(edit)connectionEditor(edit.dataset.editConnection);
+      if(event.target.closest('#cancel-connection'))$('#connection-editor-host').replaceChildren();
+    }
     const invite=event.target.closest('[data-invite]');
     if(invite&&!ctx.busy()){ctx.setBusy(true);try{const data=await ctx.api('invite',{employeeId:invite.dataset.invite});$('#invite-result').innerHTML=`<p>Код для ${esc(person(data.employeeId))}. Действует 30 минут, одноразовый.</p><label>Передай код этому участнику<input readonly type="text" value="${esc(data.code)}" autocomplete="off"></label>`;}catch(error){message('#editor-message',error.message);}finally{ctx.setBusy(false);}}
     if(event.target.closest('#download-draft')){const form=$('#draft-editor'),blob=new Blob([inputValue(form,'title')+'\n\n'+inputValue(form,'body')],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='document.txt';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
@@ -257,6 +309,6 @@ export function installPrototype(ctx) {
   const rotation=setInterval(()=>{if(auto&&state().identity&&canRefresh()){view=({board:'calendar',calendar:'gantt',gantt:'board'})[view];ctx.renderBoard();}},30000);
   const jobsTimer=setInterval(()=>{if(jobsFor&&state().identity&&!document.hidden&&$('#task-dialog').open&&!ctx.busy())loadJobs();},6000);
   const detailTimer=setInterval(checkDetail,15000);
-  window.addEventListener('pagehide',()=>{clearInterval(rotation);clearInterval(jobsTimer);clearInterval(detailTimer);});
+  window.addEventListener('pagehide',()=>{clearInterval(rotation);clearInterval(jobsTimer);clearInterval(detailTimer);const field=$('#connection-editor input[name="apiKey"]');if(field){field.value='';field.form.dataset.requestId=crypto.randomUUID();}});
   return {renderBoard,detailMarkup,detailMounted:loadJobs,canRefresh,isImportant:important,reset(){pending.clear();jobsFor=null;auto=false;view='board';lastSignal='';$('#murmuration').checked=false;if($('#editor-dialog').open)$('#editor-dialog').close();$('#brief-text').textContent='';}};
 }

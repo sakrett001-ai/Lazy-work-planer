@@ -9,3 +9,5 @@ node_modules
 artifacts
 tests
 config/*.local.json
+**/llm-master.key
+**/*.llm-key
