@@ -78,6 +78,54 @@ test('Реальный исполнитель: три роли с разными
   assert.ok(!JSON.stringify(done).includes('dummy-key'));assert.ok(!JSON.stringify(done).includes('credentialEnv'));assert.equal(store.readState().tasks[0].status,'active');
 });
 
+test('Две сессии: назначение → отчёт исполнителя → свежая сводка → агент с проверенным источником',async()=>{
+  reset();save({coordinator:off,analyst:roles.analyst,reviewer:off});
+  const manager=await signin('boss'),employee=await signin('a');
+  assert.notEqual(manager.cookie,employee.cookie);assert.notEqual(manager.csrf,employee.csrf);
+  const command=fields=>({requestId:randomUUID(),...fields});
+  async function ok(path,body,session){const response=await api(path,body,session),data=await response.json();assert.equal(response.status,200,JSON.stringify(data));return data;}
+  const fields={title:'Материалы совместного пилота',employeeId:'a',due:'2026-12-01',dueTime:'16:30'};
+  const {taskId}=await ok('task-create',command({fields}),manager);
+  const own=await ok('tasks',undefined,employee),assigned=own.tasks.find(t=>t.id===taskId);
+  assert.equal(assigned.title,fields.title);assert.equal(assigned.employeeId,'a');
+  const {taskId:privateId}=await ok('task-create',command({fields:{...fields,title:'Закрытая задача руководителя',employeeId:'boss'}}),manager);
+  assert.ok(!(await ok('tasks',undefined,employee)).tasks.some(t=>t.id===privateId));
+  assert.equal((await api('memory?taskId='+privateId,undefined,employee)).status,404);
+  assert.equal((await api('report',command({taskId:privateId,text:'Есть препятствие: нет данных.'}),employee)).status,404);
+  const text='Есть препятствие: исходные данные не получены. Нужна помощь руководителя.';
+  const report=await ok('report',command({taskId,text}),employee);
+  const fresh=await ok('tasks',undefined,manager),task=fresh.tasks.find(t=>t.id===taskId);
+  assert.equal(task.status,'blocked');assert.notEqual(task.version,assigned.version);
+  assert.ok(fresh.brief.blocked.some(t=>t.sourceId===report.sourceId));
+  assert.equal((await api('task-edit',command({taskId,expectedVersion:assigned.version,fields}),manager)).status,409);
+  const question=()=>command({taskId,expectedVersion:proto.versionOf(store.readState().tasks.find(t=>t.id===taskId)),question:'Как снять препятствие?'});
+  assert.equal((await api('assistant',question(),employee)).status,403);
+  const {jobId}=await ok('assistant',question(),manager);
+  let calls=0;
+  const response=()=>answer('Запросить исходные данные.',[{sourceId:report.sourceId,quote:text}]);
+  await createConsultationRunner({complete:async input=>{
+    calls++;const context=JSON.parse(input.prompt).taskContext;
+    assert.equal(context.taskId,taskId);assert.equal(context.current.status,'blocked');
+    assert.ok(JSON.stringify(context).includes(report.sourceId));
+    assert.ok(!JSON.stringify(context).includes(privateId));
+    return response();
+  }})(jobId);
+  const result=(await ok('assistant?taskId='+taskId,undefined,manager)).jobs.find(j=>j.id===jobId);
+  assert.equal(calls,1);assert.equal(result.status,'completed');assert.equal(result.stale,false);
+  assert.equal(result.references[0].sourceId,report.sourceId);assert.ok(result.references[0].version);
+  // A second employee message arrives while the deterministic adapter is answering.
+  const {jobId:staleId}=await ok('assistant',question(),manager);
+  await createConsultationRunner({complete:async()=>{
+    await ok('report',command({taskId,text:'Препятствие устранено, данные получены.'}),employee);
+    return response();
+  }})(staleId);
+  const jobs=(await ok('assistant?taskId='+taskId,undefined,manager)).jobs;
+  assert.equal(jobs.find(j=>j.id===jobId).stale,true);
+  const stale=jobs.find(j=>j.id===staleId);
+  assert.equal(stale.status,'failed');assert.equal(stale.text,undefined);
+  assert.equal(stale.execution.errorCode,'context_changed');
+});
+
 test('Дочитывание источника ограничено задачей и ролью; неподтверждённые и чужие цитаты не публикуются',async()=>{
   reset();save({coordinator:off,analyst:roles.analyst,reviewer:off});
   store.updateState(s=>{s.sources[0].text='Начало. '+'Подробности. '.repeat(100)+'Нужны исходные данные.';return s;});
