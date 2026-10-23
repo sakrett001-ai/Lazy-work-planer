@@ -23,12 +23,13 @@
       <p id="example-banner" class="example-banner" hidden>Стартовые поручения — вымышленные примеры. Добавляй свои задачи и участников для проверки рабочего цикла.</p>
       <div id="metrics" class="metrics"></div>
       <details class="brief-panel"><summary><span>✦ Короткая сводка</span><span id="mode-label"></span></summary><p id="brief-text"></p></details>
-      <div class="view-toolbar"><div class="tabs" role="group" aria-label="Представление задач"><button data-view="board" aria-pressed="true">Доска</button><button data-view="calendar" aria-pressed="false">Календарь</button><button data-view="gantt" aria-pressed="false">Этапы · Гант</button></div><div class="motion-controls"><label class="check-label"><input id="murmuration" type="checkbox"> Мурмурация</label><label class="check-label"><input id="pulse" type="checkbox" checked> Пульс</label></div></div>
+      <div class="view-toolbar"><div class="tabs" role="group" aria-label="Представление задач"><button data-view="board" aria-pressed="true">Канбан</button><button data-view="calendar" aria-pressed="false">Календарь</button><button data-view="gantt" aria-pressed="false">Этапы · Гант</button></div><div class="motion-controls"><label class="check-label"><input id="murmuration" type="checkbox"> Мурмурация</label><label class="check-label"><input id="pulse" type="checkbox" checked> Пульс</label></div></div>
       <p id="motion-note" class="motion-note">Ты управляешь доской.</p>
-      <div class="board-tools"><div class="tabs" role="group" aria-label="Состояние задач"><button data-filter="open" aria-pressed="true">В работе</button><button data-filter="attention" aria-pressed="false">Нужно внимание</button><button data-filter="done" aria-pressed="false">Принято</button></div><label class="search"><span>Поиск</span><input id="search" type="search" placeholder="Задача, проект или номер" autocomplete="off"></label></div>
+      <div class="board-tools"><div class="tabs" role="group" aria-label="Состояние задач"><button data-filter="open" aria-pressed="true">Все открытые</button><button data-filter="attention" aria-pressed="false">Нужно внимание</button><button data-filter="done" aria-pressed="false">Принято</button></div><label class="search"><span>Поиск</span><input id="search" type="search" placeholder="Задача, проект или номер" autocomplete="off"></label></div>
       <p id="workspace-message" class="message" role="status" aria-live="polite"></p>
       <div id="month-tools" class="month-tools" hidden><button id="prev-month" class="secondary" aria-label="Предыдущий месяц">←</button><span id="month-label"></span><button id="next-month" class="secondary" aria-label="Следующий месяц">→</button><button id="today-month" class="quiet">Текущий месяц</button></div>
-      <div id="board" class="board"></div>
+      <p id="board-guide" class="board-guide"></p>
+      <div id="board" class="board" aria-label="Доска поручений" tabindex="0"></div>
       <footer><span id="freshness">Загружаем данные…</span><span>Общая память · Персональный доступ</span></footer>
     </section>
     <p id="loading" class="initial-loading" role="status">Подключаем рабочее пространство…</p>

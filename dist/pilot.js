@@ -81,7 +81,7 @@ async function older() {
     if (!data.page.nextBefore) button.remove();
   } catch(error) {note('#detail-message',error.message);} finally {button.disabled=false;}
 }
-const prototype=installPrototype({api, refresh, openTask, renderBoard, note, setBusy, date, sourcesMarkup, sourceLink, eventMarkup, busy:()=>busy, get:()=>({identity,snapshot,selected,memory})});
+const prototype=installPrototype({api, refresh, openTask, renderBoard, note, setBusy, date, sourcesMarkup, sourceLink, eventMarkup, busy:()=>busy, get:()=>({identity,snapshot,selected,memory,filter})});
 $('#login-form').addEventListener('submit',async event=>{
   event.preventDefault(); if(busy)return; setBusy(true); note('#login-message','');
   try { await api('login',{code:$('#login-code').value.trim()}); $('#login-code').value=''; await enter(); }

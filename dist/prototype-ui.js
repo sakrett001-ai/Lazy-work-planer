@@ -1,5 +1,6 @@
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 const labels = { planned:'Запланировано', active:'В работе', blocked:'Есть препятствие', review:'На проверке', done:'Принято' };
+const boardColumns = [['planned','Запланировано'],['active','В работе'],['blocked','Препятствие'],['review','На проверке']];
 const draftNames = { extension:'Письмо о переносе', request:'Запрос данных', clarify:'Уточнение статуса', plan:'План действий', review:'Проверка результата' };
 const fieldNames = { status:'Состояние', summary:'Что известно', blocker:'Препятствие', due:'Утверждённый срок', proposedDue:'Предложенный срок', needsDecision:'Нужно решение', nextAction:'Следующий шаг' };
 const shift = (day, n) => new Date(Date.parse(day+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
@@ -30,10 +31,11 @@ export function installPrototype(ctx) {
     const {snapshot}=state(), status=Object.hasOwn(labels,task.status)?task.status:'planned';
     const pin=snapshot.preferences.pins.includes(task.id), signal=important(task)&&snapshot.preferences.seen[task.id]!==task.version;
     const due=interval(task);
-    return `<article class="task ${status} ${pin?'pinned':''} ${signal?'has-signal':''}">
+    return `<article data-card-id="${esc(task.id)}" class="task ${status} ${pin?'pinned':''} ${signal?'has-signal':''}">
       <div class="task-top"><span>${esc(task.id)}</span><button type="button" class="pin-button ${pin?'is-pinned':''}" data-pin="${esc(task.id)}" aria-pressed="${pin}" aria-label="${pin?'Открепить':'Закрепить'} ${esc(task.title)}" title="${pin?'Открепить':'Закрепить'}">⌖</button></div>
       <button class="card-open" data-task="${esc(task.id)}"><span class="status">${labels[status]}</span><h2>${esc(task.title)}</h2><p class="summary">${esc(task.summary||task.description||'Ожидаем первое обновление.')}</p>
       <div class="task-meta">${esc(person(task.employeeId))}${task.project?' · '+esc(task.project):''}${task.protocol?`<div>Протокол ${esc(task.protocol.number||'без номера')}${task.protocol.point?' · п. '+esc(task.protocol.point):''}${task.protocol.date?' · '+ctx.date(task.protocol.date):''}</div>`:''}</div>
+      <div class="card-deadline">${task.due?`<span>Срок</span><time datetime="${esc(task.due)}T${esc(task.dueTime||'18:00')}:00+03:00">${esc(ctx.date(task.due))} · ${esc(task.dueTime||'18:00')} мск</time>`:'<span>Срок не задан</span>'}</div>
       <div class="task-bottom"><span class="${due.kind}">${esc(due.text)}</span><span aria-hidden="true">↗</span></div></button>
       ${signal?`<button class="notice-button" data-notice="${esc(task.id)}">${task.proposedDue?'Запрошен перенос':task.status==='blocked'?'Нужна помощь':task.contact==='awaiting'?'Запрошен статус':'Есть событие'} · заметил ✓</button>`:''}
     </article>`;
@@ -60,19 +62,25 @@ export function installPrototype(ctx) {
     document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));
     $('#month-tools').hidden=view==='board';
     $('#month-label').textContent=new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(month+'T12:00:00Z'));
-    $('#board').className=view==='board'?'board':'alternate-view';
+    const archive=state().filter==='done';
+    $('#board').className=view==='board'?`board kanban-board${archive?' kanban-archive':''}`:'alternate-view';
+    $('#board-guide').hidden=view!=='board';
+    $('#board-guide').textContent=archive?'Принятые результаты. Вернуть задачу в работу можно из карточки.':'Открой карточку, чтобы начать работу, сообщить статус или принять результат. Закреплённые — первыми в своей колонке.';
     if(!tasks.length)return '<div class="empty"><span class="empty-mark">✦</span>Здесь пока нет задач.<br><small>Измени фильтр или создай первое поручение.</small></div>';
     if(view==='calendar')return calendar(tasks);
     if(view==='gantt')return gantt(tasks);
-    const pins=tasks.filter(t=>snapshot.preferences.pins.includes(t.id)&&t.status!=='done'), rest=tasks.filter(t=>!pins.includes(t));
-    return `${pins.length?'<div class="board-label">⌖ Закреплено</div>'+pins.map(card).join('')+'<div class="board-label">Остальные задачи</div>':''}${rest.map(card).join('')}`;
+    const columns=archive?[['done','Принято']]:boardColumns;
+    return columns.map(([status,title])=>{
+      const items=tasks.filter(task=>task.status===status).sort((a,b)=>Number(snapshot.preferences.pins.includes(b.id))-Number(snapshot.preferences.pins.includes(a.id)));
+      return `<section class="kanban-column ${status}" data-column="${status}" aria-labelledby="column-${status}"><header class="kanban-heading"><h2 id="column-${status}">${title}</h2><span class="kanban-count" aria-label="Задач: ${items.length}">${items.length}</span></header><div class="kanban-cards">${items.length?items.map(card).join(''):'<p class="column-empty">Нет задач в этой колонке</p>'}</div></section>`;
+    }).join('');
   }
   function detailMarkup() {
     const {memory,identity,selected}=state(), task=selectedTask(), current=memory.current, own=task.employeeId===identity.id&&current.status!=='done';
     const actions=manager()?[...(current.proposedDue?[['approve_due','Согласовать срок'],['reject_due','Сохранить прежний срок']]:[]),...(current.status==='review'?[['accept','Принять результат']]:[]),...(task.needsDecision&&current.status!=='review'&&!current.proposedDue?[['take_control','Взять вопрос в работу']]:[])]:[];
     const extras=manager()?({planned:[['start','Начать работу']],blocked:[['unblock','Препятствие устранено']],review:[['rework','Вернуть на доработку']],done:[['reopen','Вернуть в работу']]}[current.status]||[]):[];
     const phases=task.phases||[], suggested=memory.suggestion;
-    return `<header class="detail-header"><span class="eyebrow">${esc(selected)} · ${esc(labels[current.status]||current.status)}</span><h2 id="task-title">${esc(memory.title)}</h2><p>${esc(person(task.employeeId))} · ${esc(task.project||'Мои поручения')} · ${ctx.date(current.due)}</p>${task.description?`<p class="task-description">${esc(task.description)}</p>`:''}<div class="actions">${manager()&&current.status!=='done'?smallButton('data-edit-task','Изменить поручение'):''}${extras.map(([action,label])=>smallButton(`data-task-action="${action}"`,label)).join('')}</div></header>
+    return `<header class="detail-header"><span class="eyebrow">${esc(selected)} · ${esc(labels[current.status]||current.status)}</span><h2 id="task-title">${esc(memory.title)}</h2><p>${esc(person(task.employeeId))} · ${esc(task.project||'Мои поручения')} · ${ctx.date(current.due)}${current.due?' · '+esc(task.dueTime||'18:00')+' мск':''}</p>${task.description?`<p class="task-description">${esc(task.description)}</p>`:''}<div class="actions">${manager()&&current.status!=='done'?smallButton('data-edit-task','Изменить поручение'):''}${extras.map(([action,label])=>smallButton(`data-task-action="${action}"`,label)).join('')}</div></header>
       <p id="detail-message" class="message" role="status" aria-live="polite"></p><button type="button" id="reload-detail" class="secondary" hidden>В задаче есть обновления · показать</button>
       ${actions.length?`<section class="decision-box"><h3>Нужно твоё решение</h3><p>${current.proposedDue?`Предложено: ${ctx.date(current.proposedDue)}. Действующий срок: ${ctx.date(current.due)}.`:esc(task.blocker||task.summary||'Проверь результат и основания.')}</p><div class="actions">${actions.map(([action,label])=>smallButton(`data-decision="${action}"`,label)).join('')}</div><small>Решение изменит задачу и останется в истории.</small></section>`:''}
       <section class="detail-section"><h3>Обсуждение задачи</h3><div class="conversation">${(memory.conversation||[]).map(s=>`<article class="bubble ${s.kind==='manager_message'?'from-manager':''}"><small>${esc(s.authorName)} · ${ctx.date(s.occurredAt||s.receivedAt,true)}</small><p>${esc(s.text)}</p></article>`).join('')||'<p class="report-note">Обсуждение начнётся с первого сообщения.</p>'}</div>

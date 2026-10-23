@@ -35,6 +35,15 @@ test('Рабочий прототип в DOM: постановка с потер
     submit('#task-editor');await wait(()=>$('#task-title')?.textContent==='Подготовить тестовую сводку'&&!$('#logout').disabled);
     assert.equal(requests[0].requestId,requests[1].requestId);assert.equal(store.readState().tasks.length,1);assert.equal($('#task-content img'),null);
     const taskId=store.readState().tasks[0].id;
+    assert.equal(d.querySelectorAll('[data-column]').length,4,'Канбан показывает четыре открытых состояния');
+    assert.equal($('[data-column="planned"] [data-task]').dataset.task,taskId);
+    assert.equal($('[data-column="planned"] .kanban-count').textContent,'1');
+    assert.equal(d.querySelectorAll('.column-empty').length,3);
+    assert.equal($('.card-deadline time').getAttribute('datetime'),day+'T18:00:00+03:00');
+    assert.ok($('.card-deadline').textContent.includes('18:00 мск'));
+    click('[data-task-action="start"]');await wait(()=>store.readState().tasks[0].status==='active'&&!$('#logout').disabled);
+    assert.equal($('[data-column="active"] [data-task]').dataset.task,taskId);
+    assert.equal($('[data-column="planned"] .kanban-count').textContent,'0');
     click('#close-dialog');click('[data-pin]');await wait(()=>$('.pin-button.is-pinned')&&!$('#logout').disabled);assert.equal($('#task-dialog').open,false);
     click('[data-view="calendar"]');assert.ok($('.calendar-grid'));assert.ok($('.calendar-task')?.textContent.includes('тестовую сводку'));
     click('[data-view="board"]');click('[data-task]');await wait(()=>$('[data-new-phase]'));
@@ -67,9 +76,14 @@ test('Рабочий прототип в DOM: постановка с потер
     click('[data-task]');await wait(()=>$('#report-form'));assert.ok($('.bubble').textContent.includes('Уточни готовый результат'));assert.equal($('[data-edit-draft]'),null);assert.equal($('#preview-context'),null);
     click('[data-phase-toggle]');await wait(()=>$('#task-content progress')?.value===1&&!$('#logout').disabled);
     $('#report-text').value='Работа выполнена, результат готов к проверке.';submit('#report-form');await wait(()=>store.readState().tasks[0].status==='review'&&!$('#logout').disabled);
-    await logout();await login('boss');click('[data-task]');await wait(()=>$('[data-decision="accept"]'));
+    await logout();await login('boss');
+    assert.equal($('[data-column="review"] [data-task]').dataset.task,taskId);
+    assert.ok($('#brief-text').textContent.includes('Проверить и принять результат'));
+    click('[data-task]');await wait(()=>$('[data-decision="accept"]'));
     click('[data-decision="accept"]');await wait(()=>store.readState().tasks[0].status==='done'&&!$('#logout').disabled);
     click('#close-dialog');assert.equal($('[data-task]'),null);click('[data-filter="done"]');assert.equal($('[data-task]').dataset.task,taskId);
+    assert.equal(d.querySelectorAll('[data-column]').length,1);
+    assert.equal($('[data-column="done"] [data-task]').dataset.task,taskId);
     click('[data-task]');await wait(()=>$('[data-task-action="reopen"]'));click('[data-task-action="reopen"]');await wait(()=>store.readState().tasks[0].status==='active'&&!$('#logout').disabled);
     assert.equal(w.localStorage.length,0);assert.deepEqual(errors,[]);
   }finally{timers.forEach(clearInterval);Object.assign(globalThis,previous);w.close();store.database().close();rmSync(dir,{recursive:true,force:true});}
