@@ -3,10 +3,11 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import { readState, updateState, saveSource, markDispatched } from './store.ts';
 import { WebError, digest, login, logout, requireCsrf, requireOrigin, serverOrigin, session, sessionCookie, webTables } from './web-auth.ts';
-import { canReadTask, scopedWorkspace } from '../../dist/access.js';
+import { canReadTask, scopedWorkspace, visibleTask } from '../../dist/access.js';
 import { taskMemory } from '../../dist/task-memory.js';
 import { buildBrief, decide } from '../../dist/domain.js';
 import { runAssistantWorkflow } from '../../dist/langgraph-emb.js';
+import { createReport, readReports } from './task-reports.ts';
 import { preferences, prototypePaths, prototypeWrite, inviteParticipant, createAssistantJob, assistantJobs, versionOf } from './prototype.ts';
 import { proposal } from '../../dist/workspace-model.js';
 import { assistantContext, readSourcePage } from './assistant-memory.ts';
@@ -64,9 +65,9 @@ async function route(request: Request, options: DashboardOptions) {
   }
   if (path === '/assistant/api/session' && request.method === 'GET') return json({ actor: { id: actor.id, name: actor.name, role: actor.role || 'employee' }, csrf: auth.csrf });
   if (path === '/assistant/api/tasks' && request.method === 'GET') {
-    const state = scopedWorkspace(readState(), actor), at = new Date().toISOString();
+    const fullState = readState(), state = scopedWorkspace(fullState, actor), at = new Date().toISOString();
     const ids = new Set(state.tasks.map((task: any) => task.id)), prefs = preferences(actor.id);
-    return json({ tasks: state.tasks.map((task: any) => ({ ...task, version: taskVersion(task) })), employees: state.employees, brief: buildBrief(state, at), asOf: at,
+    return json({ tasks: state.tasks.map((task: any) => ({ ...visibleTask(fullState, actor, task), version: taskVersion(task) })), employees: state.employees, brief: buildBrief(state, at), asOf: at,
       preferences: { pins: prefs.pins.filter(id => ids.has(id)), seen: Object.fromEntries(Object.entries(prefs.seen).filter(([id]) => ids.has(id))) },
       assistant: { available: Boolean(options.assistantAvailable), mode: options.assistantAvailable ? options.assistantMode || 'eve' : 'rules' },
       activity: state.events.slice(0, 12), examples: Boolean((state.settings as any).prototypeExamples), autoCheckins: Boolean((state.settings as any).prototypeAutoCheckins) });
@@ -76,7 +77,7 @@ async function route(request: Request, options: DashboardOptions) {
     if (!canReadTask(actor, state.tasks.find(t => t.id === taskId))) throw new WebError(404, 'Задача не найдена.');
     const task = state.tasks.find(t => t.id === taskId);
     const memory: any = taskMemory(state, actor, taskId, { before: url.searchParams.get('before'), limit: 20 });
-    return json({ ...memory, taskVersion: taskVersion(task), task, suggestion: actor.role === 'manager' ? proposal(task) : null,
+    return json({ ...memory, taskVersion: taskVersion(task), task: visibleTask(state, actor, task), children: actor.role === 'manager' ? state.tasks.filter(t => t.parentId === taskId).map(t => ({...t,version:taskVersion(t)})) : [], suggestion: actor.role === 'manager' ? proposal(task) : null,
       drafts: actor.role === 'manager' ? (state.decisionDrafts || []).filter(d => d.taskId === taskId).slice(-30).map((draft: any) => ({ ...draft, version: versionOf(draft) })) : [],
       conversation: state.sources.filter(s => s.taskId === taskId).slice(-50).map(s => ({ ...s, authorName: s.authorName || state.employees.find(p => p.id === s.employeeId)?.name || 'Участник' })) });
   }
@@ -85,6 +86,8 @@ async function route(request: Request, options: DashboardOptions) {
     const input = z.object({ taskId: z.string().min(1).max(150), sourceId: z.string().min(1).max(150), version: z.string().regex(/^[a-f0-9]{64}$/).optional(), offset: z.coerce.number().int().min(0).optional(), limit: z.coerce.number().int().min(1).max(2000).optional() }).strict().parse(Object.fromEntries(url.searchParams));
     return json(readSourcePage(readState(), actor, input));
   }
+  if (path === '/assistant/api/reports' && request.method === 'GET') return json(readReports(actor, url.searchParams.get('id')));
+  if (path === '/assistant/api/report-create' && request.method === 'POST') return json(createReport(await readJson(request), actor));
   if (path === '/assistant/api/assistant' && request.method === 'GET') return json({ jobs: assistantJobs(actor, url.searchParams.get('taskId') || '') });
   if (path === '/assistant/api/assistant' && request.method === 'POST') {
     if (actor.role !== 'manager') throw new WebError(403, 'Консультация доступна руководителю.');

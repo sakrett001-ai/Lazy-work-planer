@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { readState, updateState, currentEmployee, type Employee, type State } from './store.ts';
 import { digest, issueInvite, webTables, WebError } from './web-auth.ts';
 import { canReadTask } from '../../dist/access.js';
-import { validDate } from '../../dist/domain.js';
+import { validDate, hasPendingStatusRequest } from '../../dist/domain.js';
 import { addTask, editTask, changeTask, savePhase, setPhase, makeDraft, proposal } from '../../dist/workspace-model.js';
 import { saveDecisionDraft } from './decisions.ts';
 import { taskMemory } from '../../dist/task-memory.js';
@@ -23,7 +23,7 @@ const fields = z.object({
   protocolNumber: z.string().trim().max(100).default(''), protocolPoint: z.string().trim().max(100).default(''), protocolDate: day.default(''),
 }).strict();
 const schemas = {
-  'task-create': z.object({ ...operation, fields }).strict(),
+  'task-create': z.object({ ...operation, fields, parentId: id.optional(), expectedParentVersion: version.optional() }).strict().refine(v => Boolean(v.parentId) === Boolean(v.expectedParentVersion), 'Для дочернего поручения нужна актуальная версия родителя.'),
   'task-edit': z.object({ ...target, fields }).strict(),
   'task-action': z.object({ ...target, action: z.enum(['start', 'reopen', 'rework', 'unblock']) }).strict(),
   'phase-save': z.object({ ...target, phaseId: id.nullable(), phase: z.object({ title: z.string().trim().min(1).max(120), start: day.refine(Boolean), end: day.refine(Boolean), dependsOn: id.nullable() }).strict() }).strict(),
@@ -81,10 +81,23 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
     receipt = { ok: true, duplicate: false, taskId: input.taskId };
     try {
       if (path === 'task-create') {
+        if (input.parentId) {
+          const parent = allowedTask(state, current, input.parentId); fresh(parent, input.expectedParentVersion);
+          if (parent.status === 'done') throw new WebError(409, 'Сначала верните основное поручение в работу.');
+          const visited = new Set<string>(); let cursor = parent;
+          while (cursor) {
+            if (visited.has(cursor.id) || visited.size >= 20) throw new WebError(400, 'Цикл или слишком глубокая цепочка поручений.');
+            visited.add(cursor.id);
+            if (!cursor.parentId) break;
+            cursor = state.tasks.find(t => t.id === cursor.parentId);
+            if (!cursor) throw new WebError(400, 'Родительская цепочка повреждена.');
+          }
+        }
         const result = addTask(state, { ...input.fields, summary: 'Ожидаем первое обновление.' }, new Date(at));
         next = result.state;
         (result.task as any).description = input.fields.description;
         result.task.contact = 'not_requested';
+        Object.assign(result.task, { originalDue: result.task.due, originalDueTime: result.task.due ? result.task.dueTime : null, ...(input.parentId ? {parentId: input.parentId} : {}) });
         receipt.taskId = result.task.id;
       } else if (path === 'task-edit') {
         next = editTask(state, task.id, { ...input.fields, summary: task.summary || '' }, new Date(at));
@@ -100,6 +113,11 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
         next = setPhase(state, task.id, input.phaseId, input.done, new Date(at));
       } else if (path === 'message') {
         if (task.status === 'done') throw new WebError(409, 'Сначала верните задачу в работу.');
+        if (input.requestUpdate && hasPendingStatusRequest(task)) {
+          receipt.alreadyPending = true;
+          db.prepare('INSERT INTO web_operations VALUES (?,?,?)').run(key, requestHash, JSON.stringify(receipt));
+          return state;
+        }
         const source = { id: key, taskId: task.id, employeeId: current.id, text: input.text, occurredAt: at, receivedAt: at, channel: 'workspace', kind: 'manager_message' };
         state.sources.push(source);
         state.events.unshift({ key, sourceId: key, taskId: task.id, actorId: current.id, kind: 'manager_message', at, text: input.requestUpdate ? 'Руководитель запросил обновление в обсуждении задачи.' : 'Сообщение руководителя в обсуждении задачи.' });

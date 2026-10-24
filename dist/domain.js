@@ -74,7 +74,9 @@ export function buildBrief(state,now) {
   const silent=state.tasks.filter(t=>t.status!=='done'&&t.contact==='no_reply').map(t=>({id:t.id,text:`${t.title} — нет ответа от ${name(t)}; прогресс не подтверждён.`,sourceId:t.latestSourceId}));
   return {asOf:now,metrics:m,decision,blocked,silent,text:[`На контроле: ${m.open}. Требуют решения: ${m.decision}. Препятствия: ${m.blocked}. Нет ответа: ${m.noReply}.`,...decision.map(x=>'РЕШЕНИЕ · '+x.text),...blocked.map(x=>'ПРЕПЯТСТВИЕ · '+x.text),...silent.map(x=>'НЕТ ОТВЕТА · '+x.text)].join('\n\n')};
 }
+export function hasPendingStatusRequest(task) { return ['awaiting','no_reply'].includes(task.contact); }
 export function shouldCheckIn(task,now,settings) {
+  if(hasPendingStatusRequest(task)) return false;
   if(task.status==='done'||task.status==='review') return false;
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:settings.timezone||'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23',weekday:'short'}).formatToParts(new Date(now));
   const get=t=>parts.find(p=>p.type===t)?.value; const date=`${get('year')}-${get('month')}-${get('day')}`;

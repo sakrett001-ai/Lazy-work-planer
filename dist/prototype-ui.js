@@ -10,6 +10,7 @@ export function installPrototype(ctx) {
   const $ = s => document.querySelector(s);
   let view='board', month=today().slice(0,7)+'-01', lastInteraction=Date.now(), auto=false, draft=null, editingTask=null, editingPhase=null, jobsFor=null, lastSignal='', llmSettings=null;
   const pending=new Map();
+  let creatingChild=null, reportEpoch=0, displayedReport=null;
   const jobViews=new WeakMap();
   const state=()=>ctx.get();
   const manager=()=>state().identity?.role==='manager';
@@ -52,7 +53,7 @@ export function installPrototype(ctx) {
   }
   function renderBoard(tasks) {
     const {snapshot}=state();
-    $('#new-task').hidden=!manager(); $('#team').hidden=!manager(); $('#llm-settings').hidden=!manager();
+    $('#new-task').hidden=!manager(); $('#team').hidden=!manager(); $('#llm-settings').hidden=!manager(); $('#reports').hidden=!manager();
     $('#mode-label').textContent=snapshot.assistant.available?'ИИ: консультации по задачам':'Сводка и шаблоны · ИИ не подключён';
     $('#example-banner').hidden=!snapshot.examples;
     $('#brief-text').textContent=snapshot.brief.text;
@@ -75,6 +76,12 @@ export function installPrototype(ctx) {
       return `<section class="kanban-column ${status}" data-column="${status}" aria-labelledby="column-${status}"><header class="kanban-heading"><h2 id="column-${status}">${title}</h2><span class="kanban-count" aria-label="Задач: ${items.length}">${items.length}</span></header><div class="kanban-cards">${items.length?items.map(card).join(''):'<p class="column-empty">Нет задач в этой колонке</p>'}</div></section>`;
     }).join('');
   }
+  function delegationMarkup(task) {
+    if(!manager())return '';
+    const children=state().memory.children||[], done=children.filter(t=>t.status==='done').length;
+    const original=Object.hasOwn(task,'originalDue')?(task.originalDue?`${ctx.date(task.originalDue)} · ${esc(task.originalDueTime||'18:00')} мск`:'При постановке срок не задан'):'Первоначальный срок не зафиксирован';
+    return `<section class="detail-section delegation"><div class="section-heading"><h3>Дочерние поручения · ${done}/${children.length} принято</h3>${task.status!=='done'?smallButton('data-new-child','+ Поручение исполнителю'):''}</div><p class="report-note">Ответственность за результат остаётся у исполнителя родительского поручения. Дочерние поручения — не последовательные этапы и не закрывают родителя автоматически.</p><p class="report-note">Первоначальный срок: ${original}. Текущий: ${task.due?ctx.date(task.due)+' · '+esc(task.dueTime||'18:00')+' мск':'не задан'}. ${esc(interval(task).text)}</p>${task.parentId?`<p class="report-note">Родительское поручение: ${smallButton(`data-child-open="${esc(task.parentId)}"`,esc(task.parentId))}</p>`:''}${children.map(child=>`<article class="child-task"><button type="button" class="quiet" data-child-open="${esc(child.id)}"><strong>${esc(child.title)}</strong><small>${esc(child.id)} · ${esc(person(child.employeeId))}</small></button><p>${esc(labels[child.status]||child.status)} · ${child.due?ctx.date(child.due)+' · '+esc(child.dueTime||'18:00')+' мск':'Без срока'} · ${esc(interval(child).text)}</p><p>${esc(child.blocker||child.summary||'Ожидаем обновление')}</p></article>`).join('')||'<p class="report-note">Можно распределить части работы между исполнителями, сохранив общий срок и ответственность.</p>'}</section>`;
+  }
   function detailMarkup() {
     const {memory,identity,selected}=state(), task=selectedTask(), current=memory.current, own=task.employeeId===identity.id&&current.status!=='done';
     const actions=manager()?[...(current.proposedDue?[['approve_due','Согласовать срок'],['reject_due','Сохранить прежний срок']]:[]),...(current.status==='review'?[['accept','Принять результат']]:[]),...(task.needsDecision&&current.status!=='review'&&!current.proposedDue?[['take_control','Взять вопрос в работу']]:[])]:[];
@@ -82,6 +89,7 @@ export function installPrototype(ctx) {
     const phases=task.phases||[], suggested=memory.suggestion;
     return `<header class="detail-header"><span class="eyebrow">${esc(selected)} · ${esc(labels[current.status]||current.status)}</span><h2 id="task-title">${esc(memory.title)}</h2><p>${esc(person(task.employeeId))} · ${esc(task.project||'Мои поручения')} · ${ctx.date(current.due)}${current.due?' · '+esc(task.dueTime||'18:00')+' мск':''}</p>${task.description?`<p class="task-description">${esc(task.description)}</p>`:''}<div class="actions">${manager()&&current.status!=='done'?smallButton('data-edit-task','Изменить поручение'):''}${extras.map(([action,label])=>smallButton(`data-task-action="${action}"`,label)).join('')}</div></header>
       <p id="detail-message" class="message" role="status" aria-live="polite"></p><button type="button" id="reload-detail" class="secondary" hidden>В задаче есть обновления · показать</button>
+      ${delegationMarkup(task)}
       ${actions.length?`<section class="decision-box"><h3>Нужно твоё решение</h3><p>${current.proposedDue?`Предложено: ${ctx.date(current.proposedDue)}. Действующий срок: ${ctx.date(current.due)}.`:esc(task.blocker||task.summary||'Проверь результат и основания.')}</p><div class="actions">${actions.map(([action,label])=>smallButton(`data-decision="${action}"`,label)).join('')}</div><small>Решение изменит задачу и останется в истории.</small></section>`:''}
       <section class="detail-section"><h3>Обсуждение задачи</h3><div class="conversation">${(memory.conversation||[]).map(s=>`<article class="bubble ${s.kind==='manager_message'?'from-manager':''}"><small>${esc(s.authorName)} · ${ctx.date(s.occurredAt||s.receivedAt,true)}</small><p>${esc(s.text)}</p></article>`).join('')||'<p class="report-note">Обсуждение начнётся с первого сообщения.</p>'}</div>
       ${own?`<form id="report-form"><label for="report-text">Что готово и где нужна помощь?</label><textarea id="report-text" maxlength="4000" required placeholder="Например: ожидаем исходные данные, нужна помощь…"></textarea><p class="report-note">Ответ сохраняется вместе с источником. Разбор статуса сейчас выполняется по правилам; приёмку и перенос подтверждает руководитель.</p><button class="primary" type="submit">Сообщить статус ↗</button></form>`:manager()&&current.status!=='done'?`<form id="message-form"><label for="manager-message">Сообщение исполнителю</label><textarea id="manager-message" name="text" maxlength="4000" required placeholder="Уточни готовый результат или предложи следующий шаг…"></textarea><label class="check-label"><input type="checkbox" name="requestUpdate"> Запросить обновление статуса</label><button class="primary" type="submit">Добавить в обсуждение ↗</button><small class="report-note">Сообщение появится у исполнителя в этой задаче.</small></form>`:''}</section>
@@ -104,7 +112,7 @@ export function installPrototype(ctx) {
       if(after)after(result);
       await ctx.refresh();
       const task=['pin','notice'].includes(path)?null:result.taskId||taskId;
-      if(task) {await ctx.openTask(task);message('#detail-message','Сохранено.',true);}
+      if(task) {await ctx.openTask(task);message('#detail-message',result.alreadyPending?'Запрос уже ожидает ответа. Новое сообщение не добавлено.':'Сохранено.',true);}
       else message('#workspace-message','Сохранено.',true);
       return result;
     } catch(error) { message(saved?'#workspace-message':messageTarget,saved?'Изменение сохранено. Обнови данные, когда связь восстановится.':error.message,saved); }
@@ -114,9 +122,55 @@ export function installPrototype(ctx) {
     $('#editor-title').textContent=title;$('#editor-content').innerHTML=markup;message('#editor-message','');if(!$('#editor-dialog').open)$('#editor-dialog').showModal();
   }
   function input(name,label,value='',type='text',extra='') { return `<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`; }
-  function taskEditor(task=null) {
+  function showSnapshot(report) {
+    displayedReport=report;
+    openEditor('Сохранённый отчёт',`<p class="report-note">Снимок на ${esc(ctx.date(report.createdAt,true))}. Последующие изменения карточек не меняют этот отчёт.</p><pre id="snapshot-report-text" class="snapshot-report-text"></pre><div class="actions">${smallButton('id="download-report"','Скачать текст')}${smallButton('id="new-report-selection"','К списку и новому отчёту')}</div>`);
+    $('#snapshot-report-text').textContent=report.text;
+  }
+  async function reportsEditor() {
+    if(ctx.busy()||!manager())return;
+    const epoch=++reportEpoch,actor=state().identity.id;
+    openEditor('Отчёты по поручениям','<p role="status" class="report-note">Загружаем текущие поручения…</p>');
+    ctx.setBusy(true);
+    try {
+      await ctx.refresh();const data=await ctx.api('reports');
+      if(epoch!==reportEpoch||state().identity?.id!==actor||!$('#editor-dialog').open)return;
+      const tasks=state().snapshot.tasks;
+      $('#editor-content').innerHTML=`<form id="snapshot-report-form"><p class="report-note">Выбери до 50 поручений. При выборе родителя дочерние отмечаются автоматически, пока включена опция ниже. Любую галочку можно снять; в отчёт попадут только отмеченные поручения. Отчёт сохранит факты и сроки на момент формирования, без ответа модели.</p><label class="check-label"><input id="include-report-children" type="checkbox" checked> При выборе поручения включать дочерние</label><fieldset class="report-selection"><legend>Поручения в отчёте</legend>${tasks.map(task=>`<label class="report-choice"><input type="checkbox" name="taskIds" value="${esc(task.id)}" data-version="${esc(task.version)}"><span><strong>${esc(task.title)}</strong><small>${esc(task.id)} · ${esc(person(task.employeeId))} · ${esc(labels[task.status]||task.status)}${task.parentId?' · часть '+esc(task.parentId):''}</small></span></label>`).join('')||'<p>Поручений пока нет.</p>'}</fieldset><button class="primary" type="submit" ${tasks.length?'':'disabled'}>Сохранить датированный отчёт</button></form><section class="detail-section"><h3>Сохранённые отчёты</h3><div class="saved-reports">${data.reports.map(report=>smallButton(`data-saved-report="${esc(report.id)}"`,`${ctx.date(report.createdAt,true)} · ${report.taskCount} поручений`)).join('')||'<p class="report-note">Отчётов пока нет.</p>'}</div></section>`;
+    }catch(error){if(epoch===reportEpoch)message('#editor-message',error.message);}
+    finally{ctx.setBusy(false);}
+  }
+  async function loadSavedReport(id) {
+    if(ctx.busy()||!manager())return;
+    const epoch=++reportEpoch,actor=state().identity.id;ctx.setBusy(true);
+    try{const data=await ctx.api('reports?id='+encodeURIComponent(id));if(epoch===reportEpoch&&state().identity?.id===actor&&$('#editor-dialog').open)showSnapshot(data.report);}
+    catch(error){if(epoch===reportEpoch)message('#editor-message',error.message);}
+    finally{ctx.setBusy(false);}
+  }
+  function includeReportChildren(form, roots) {
+    const tasks=state().snapshot.tasks, selected=new Set(roots), visited=new Set();
+    let frontier=[...roots];
+    for(let depth=0;depth<20&&frontier.length;depth++) {
+      const next=[];
+      for(const id of frontier){if(visited.has(id))continue;visited.add(id);for(const task of tasks)if(task.parentId===id&&!visited.has(task.id)){selected.add(task.id);next.push(task.id);}}
+      frontier=next;
+    }
+    for(const box of form.querySelectorAll('input[name="taskIds"]'))if(selected.has(box.value))box.checked=true;
+  }
+  async function saveReportForm(form) {
+    if(ctx.busy()||!manager())return;
+    const selection=[...form.querySelectorAll('input[name="taskIds"]:checked')].map(el=>({taskId:el.value,expectedVersion:el.dataset.version}));
+    if(!selection.length||selection.length>50){message('#editor-message','Выбери от 1 до 50 поручений.');return;}
+    const key=JSON.stringify({path:'report-create',selection});if(!pending.has(key))pending.set(key,crypto.randomUUID());
+    const epoch=reportEpoch,actor=state().identity.id;ctx.setBusy(true);message('#editor-message','');
+    try{const data=await ctx.api('report-create',{requestId:pending.get(key),selection});pending.delete(key);if(epoch===reportEpoch&&state().identity?.id===actor&&$('#editor-dialog').open)showSnapshot(data.report);}
+    catch(error){if(epoch===reportEpoch)message('#editor-message',error.status===409?'Поручения изменились. Закрой окно и открой «Отчёты» заново, затем проверь выбор.':error.message);}
+    finally{ctx.setBusy(false);}
+  }
+  function taskEditor(task=null,parent=null) {
+    creatingChild=parent?{parentId:parent.id,expectedParentVersion:state().memory.taskVersion}:null;
     editingTask=task?{id:task.id,version:state().memory.taskVersion}:null;
-    openEditor(task?'Изменить поручение':'Новое поручение',`<form id="task-editor"><label>Что нужно сделать?<input name="title" required maxlength="160" value="${esc(task?.title||'')}" placeholder="Например: подготовить свод предложений"></label><label>Ожидаемый результат<textarea name="description" maxlength="2000" placeholder="Что должно получиться и как понять, что задача выполнена">${esc(task?.description||'')}</textarea></label><div class="form-grid"><label>Исполнитель<select name="employeeId">${state().snapshot.employees.map(p=>`<option value="${esc(p.id)}" ${p.id===(task?.employeeId||state().identity.id)?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>${input('project','Проект',task?.project||'','text','maxlength="120"')}${input('due','Срок (необязательно)',task?.due||'','date')}${input('dueTime','Время, Москва',task?.dueTime||'18:00','time','required')}</div><details ${task?.protocol?'open':''}><summary>Реквизиты протокола — если есть</summary><div class="form-grid">${input('protocolNumber','Номер',task?.protocol?.number||'','text','maxlength="100"')}${input('protocolPoint','Пункт',task?.protocol?.point||'','text','maxlength="100"')}${input('protocolDate','Дата',task?.protocol?.date||'','date')}</div></details><button type="submit" class="primary">${task?'Сохранить изменения':'Поставить задачу'} ↗</button></form>`);
+    openEditor(task?'Изменить поручение':parent?'Дочернее поручение':'Новое поручение',`${parent?`<p class="report-note">Часть поручения «${esc(parent.title)}». Назначь отдельного исполнителя и срок. Срок и ответственность родителя не меняются.</p>`:''}<form id="task-editor"><label>Что нужно сделать?<input name="title" required maxlength="160" value="${esc(task?.title||'')}" placeholder="Например: подготовить свод предложений"></label><label>Ожидаемый результат<textarea name="description" maxlength="2000" placeholder="Что должно получиться и как понять, что задача выполнена">${esc(task?.description||'')}</textarea></label><div class="form-grid"><label>Исполнитель<select name="employeeId">${state().snapshot.employees.map(p=>`<option value="${esc(p.id)}" ${p.id===(task?.employeeId||state().identity.id)?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>${input('project','Проект',task?.project||'','text','maxlength="120"')}${input('due','Срок (необязательно)',task?.due||'','date')}${input('dueTime','Время, Москва',task?.dueTime||'18:00','time','required')}</div><details ${task?.protocol?'open':''}><summary>Реквизиты протокола — если есть</summary><div class="form-grid">${input('protocolNumber','Номер',task?.protocol?.number||'','text','maxlength="100"')}${input('protocolPoint','Пункт',task?.protocol?.point||'','text','maxlength="100"')}${input('protocolDate','Дата',task?.protocol?.date||'','date')}</div></details><button type="submit" class="primary">${task?'Сохранить изменения':'Поставить задачу'} ↗</button></form>`);
   }
   function phaseEditor(phase=null) {
     const task=selectedTask();editingPhase={id:phase?.id||null,taskId:task.id,version:state().memory.taskVersion};
@@ -170,7 +224,7 @@ export function installPrototype(ctx) {
     try {
       const fresh=await ctx.api('memory?taskId='+encodeURIComponent(id));
       if(state().selected!==id||state().identity?.id!==actorId||!$('#reload-detail'))return;
-      const key=data=>JSON.stringify([data.taskVersion,data.conversation?.at(-1)?.id,data.drafts?.map(d=>d.version),data.timeline?.[0]?.key]);
+      const key=data=>JSON.stringify([data.taskVersion,data.conversation?.at(-1)?.id,data.drafts?.map(d=>d.version),data.timeline?.[0]?.key,data.children?.map(t=>[t.id,t.version])]);
       $('#reload-detail').hidden=key(fresh)===key(state().memory);
     }catch(error){if(state().selected===id)message('#detail-message',error.message);}
   }
@@ -259,11 +313,13 @@ export function installPrototype(ctx) {
   $('#today-month').addEventListener('click',()=>{month=today().slice(0,7)+'-01';ctx.renderBoard();});
   $('#murmuration').addEventListener('change',event=>{auto=event.target.checked;lastInteraction=Date.now();$('#motion-note').textContent=auto?'Смена видов каждые 30 секунд; пауза при взаимодействии.':'Ты управляешь доской.';});
   $('#pulse').addEventListener('change',event=>document.body.classList.toggle('quiet-motion',!event.target.checked));
-  $('#new-task').addEventListener('click',()=>taskEditor());$('#team').addEventListener('click',teamEditor);$('#llm-settings').addEventListener('click',modelsEditor);
+  $('#new-task').addEventListener('click',()=>taskEditor());$('#team').addEventListener('click',teamEditor);$('#llm-settings').addEventListener('click',modelsEditor);$('#reports').addEventListener('click',reportsEditor);
   $('#close-editor').addEventListener('click',()=>{if(!ctx.busy())$('#editor-dialog').close();});
   $('#editor-dialog').addEventListener('cancel',event=>{if(ctx.busy())event.preventDefault();});
-  $('#editor-dialog').addEventListener('close',()=>{$('#editor-content').replaceChildren();draft=null;editingTask=null;editingPhase=null;llmSettings=null;});
+  $('#editor-dialog').addEventListener('close',()=>{$('#editor-content').replaceChildren();draft=null;editingTask=null;editingPhase=null;llmSettings=null;creatingChild=null;displayedReport=null;reportEpoch++;});
   $('#editor-dialog').addEventListener('change',event=>{
+    if(event.target.form?.id==='snapshot-report-form'&&$('#include-report-children')?.checked){const form=event.target.form;if(event.target.name==='taskIds'&&event.target.checked)includeReportChildren(form,[event.target.value]);if(event.target.id==='include-report-children')includeReportChildren(form,[...form.querySelectorAll('input[name="taskIds"]:checked')].map(box=>box.value));}
+
     if(event.target.form?.id==='connection-editor'){
       event.target.form.dataset.requestId=crypto.randomUUID();
       if(event.target.name==='provider')$('#giga-scope-field').hidden=event.target.value!=='gigachat';
@@ -279,6 +335,8 @@ export function installPrototype(ctx) {
   $('#task-dialog').addEventListener('click',event=>{
     if(ctx.busy())return;const button=event.target.closest('button');if(!button)return;const task=selectedTask();if(!task)return;
     if(button.hasAttribute('data-edit-task'))taskEditor(task);
+    if(button.hasAttribute('data-new-child'))taskEditor(null,task);
+    if(button.dataset.childOpen)ctx.openTask(button.dataset.childOpen).catch(error=>message('#detail-message',error.message));
     if(button.id==='preview-context')previewContext(button);
     if(button.dataset.sourceOpen)readSource(button);
     if(button.id==='reload-detail')reloadDetail();
@@ -296,7 +354,8 @@ export function installPrototype(ctx) {
   });
   $('#editor-dialog').addEventListener('submit',event=>{
     event.preventDefault();const form=event.target,dialog='#editor-dialog';
-    if(form.id==='task-editor'){const fields=Object.fromEntries(['title','description','employeeId','project','due','dueTime','protocolNumber','protocolPoint','protocolDate'].map(k=>[k,inputValue(form,k)]));mutate(editingTask?'task-edit':'task-create',{fields,...(editingTask?{taskId:editingTask.id,expectedVersion:editingTask.version}:{})},{dialog});}
+    if(form.id==='snapshot-report-form'){saveReportForm(form);return;}
+    if(form.id==='task-editor'){const fields=Object.fromEntries(['title','description','employeeId','project','due','dueTime','protocolNumber','protocolPoint','protocolDate'].map(k=>[k,inputValue(form,k)]));mutate(editingTask?'task-edit':'task-create',{fields,...(editingTask?{taskId:editingTask.id,expectedVersion:editingTask.version}:creatingChild||{})},{dialog});}
     if(form.id==='phase-editor')mutate('phase-save',{taskId:editingPhase.taskId,expectedVersion:editingPhase.version,phaseId:editingPhase.id,phase:{title:inputValue(form,'title'),start:inputValue(form,'start'),end:inputValue(form,'end'),dependsOn:inputValue(form,'dependsOn')||null}},{dialog});
     if(form.id==='draft-editor')mutate('draft-save',{draftId:draft.id,expectedVersion:draft.version,expectedTaskVersion:draft.taskVersion,title:inputValue(form,'title'),body:inputValue(form,'body'),status:inputValue(form,'status')},{dialog});
     if(form.id==='automation-form')mutate('automation',{enabled:form.elements.enabled.checked},{dialog});
@@ -306,6 +365,9 @@ export function installPrototype(ctx) {
   });
   $('#editor-dialog').addEventListener('click',async event=>{
     if(!ctx.busy()){
+      if(event.target.closest('#new-report-selection'))reportsEditor();
+      const reportButton=event.target.closest('[data-saved-report]');if(reportButton)loadSavedReport(reportButton.dataset.savedReport);
+      if(event.target.closest('#download-report')&&displayedReport){const blob=new Blob([displayedReport.text],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='report-'+displayedReport.id+'.txt';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
       if(event.target.closest('#add-connection'))connectionEditor();
       const edit=event.target.closest('[data-edit-connection]');if(edit)connectionEditor(edit.dataset.editConnection);
       if(event.target.closest('#cancel-connection'))$('#connection-editor-host').replaceChildren();
