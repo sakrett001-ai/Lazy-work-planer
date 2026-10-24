@@ -24,3 +24,10 @@ export function scopedWorkspace(state, actor) {
     settings: state.settings,
   };
 }
+
+/** Parent linkage never grants read access or exposes an unreadable parent. */
+export function visibleTask(state, actor, task) {
+  const result = { ...task };
+  if (result.parentId && !canReadTask(actor, state.tasks.find(t => t.id === result.parentId))) delete result.parentId;
+  return result;
+}

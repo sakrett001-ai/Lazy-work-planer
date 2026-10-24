@@ -3,12 +3,13 @@ import { z } from 'zod';
 import { readState, updateState, currentEmployee, type Employee, type State } from './store.ts';
 import { digest, issueInvite, webTables, WebError } from './web-auth.ts';
 import { canReadTask } from '../../dist/access.js';
-import { validDate } from '../../dist/domain.js';
+import { validDate, hasPendingStatusRequest } from '../../dist/domain.js';
 import { addTask, editTask, changeTask, savePhase, setPhase, makeDraft, proposal } from '../../dist/workspace-model.js';
 import { saveDecisionDraft } from './decisions.ts';
 import { taskMemory } from '../../dist/task-memory.js';
 import { assistantContext, contextVersion, readSourcePage, sourceVersion, mergeEvidenceReads, verifyReadReferences, type EvidenceRead } from './assistant-memory.ts';
 import type { Execution } from './llm-config.ts';
+import { beginAttempt, readAttempts, markAttemptsUnknown, type AttemptHandle } from './provider-attempts.ts';
 
 const id = z.string().trim().min(1).max(150);
 const version = z.string().regex(/^[a-f0-9]{64}$/);
@@ -22,7 +23,7 @@ const fields = z.object({
   protocolNumber: z.string().trim().max(100).default(''), protocolPoint: z.string().trim().max(100).default(''), protocolDate: day.default(''),
 }).strict();
 const schemas = {
-  'task-create': z.object({ ...operation, fields }).strict(),
+  'task-create': z.object({ ...operation, fields, parentId: id.optional(), expectedParentVersion: version.optional() }).strict().refine(v => Boolean(v.parentId) === Boolean(v.expectedParentVersion), 'Для дочернего поручения нужна актуальная версия родителя.'),
   'task-edit': z.object({ ...target, fields }).strict(),
   'task-action': z.object({ ...target, action: z.enum(['start', 'reopen', 'rework', 'unblock']) }).strict(),
   'phase-save': z.object({ ...target, phaseId: id.nullable(), phase: z.object({ title: z.string().trim().min(1).max(120), start: day.refine(Boolean), end: day.refine(Boolean), dependsOn: id.nullable() }).strict() }).strict(),
@@ -80,10 +81,23 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
     receipt = { ok: true, duplicate: false, taskId: input.taskId };
     try {
       if (path === 'task-create') {
+        if (input.parentId) {
+          const parent = allowedTask(state, current, input.parentId); fresh(parent, input.expectedParentVersion);
+          if (parent.status === 'done') throw new WebError(409, 'Сначала верните основное поручение в работу.');
+          const visited = new Set<string>(); let cursor = parent;
+          while (cursor) {
+            if (visited.has(cursor.id) || visited.size >= 20) throw new WebError(400, 'Цикл или слишком глубокая цепочка поручений.');
+            visited.add(cursor.id);
+            if (!cursor.parentId) break;
+            cursor = state.tasks.find(t => t.id === cursor.parentId);
+            if (!cursor) throw new WebError(400, 'Родительская цепочка повреждена.');
+          }
+        }
         const result = addTask(state, { ...input.fields, summary: 'Ожидаем первое обновление.' }, new Date(at));
         next = result.state;
         (result.task as any).description = input.fields.description;
         result.task.contact = 'not_requested';
+        Object.assign(result.task, { originalDue: result.task.due, originalDueTime: result.task.due ? result.task.dueTime : null, ...(input.parentId ? {parentId: input.parentId} : {}) });
         receipt.taskId = result.task.id;
       } else if (path === 'task-edit') {
         next = editTask(state, task.id, { ...input.fields, summary: task.summary || '' }, new Date(at));
@@ -99,6 +113,11 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
         next = setPhase(state, task.id, input.phaseId, input.done, new Date(at));
       } else if (path === 'message') {
         if (task.status === 'done') throw new WebError(409, 'Сначала верните задачу в работу.');
+        if (input.requestUpdate && hasPendingStatusRequest(task)) {
+          receipt.alreadyPending = true;
+          db.prepare('INSERT INTO web_operations VALUES (?,?,?)').run(key, requestHash, JSON.stringify(receipt));
+          return state;
+        }
         const source = { id: key, taskId: task.id, employeeId: current.id, text: input.text, occurredAt: at, receivedAt: at, channel: 'workspace', kind: 'manager_message' };
         state.sources.push(source);
         state.events.unshift({ key, sourceId: key, taskId: task.id, actorId: current.id, kind: 'manager_message', at, text: input.requestUpdate ? 'Руководитель запросил обновление в обсуждении задачи.' : 'Сообщение руководителя в обсуждении задачи.' });
@@ -154,7 +173,7 @@ export function inviteParticipant(raw: unknown, actor: Employee) {
   return { code: issueInvite(employeeId), expiresInMinutes: 30, employeeId };
 }
 
-export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; contextVersion?: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; startedAt?: string; text?: string; error?: string; stale?: boolean; references?: {sourceId:string;quote:string;version?:string}[]; contextRead?: {version:string;at:string}; evidenceReads?: EvidenceRead[]; execution?: Execution };
+export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; contextVersion?: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; startedAt?: string; text?: string; error?: string; recoveryReason?: 'expired'|'execution_uncertain'|'context_changed'; stale?: boolean; references?: {sourceId:string;quote:string;version?:string}[]; contextRead?: {version:string;at:string}; evidenceReads?: EvidenceRead[]; execution?: Execution };
 const expired = (job: AssistantJob) => Date.now() - Date.parse(job.startedAt || job.createdAt) >= 10 * 60000;
 export function getJob(jobId: string): AssistantJob|undefined {
   const row = tables().prepare('SELECT data FROM web_assistant_jobs WHERE id=?').get(jobId) as {data:string}|undefined;
@@ -168,34 +187,83 @@ export function assistantJobs(actor: Employee, taskId: string) {
   const jobs = (tables().prepare("SELECT data FROM web_assistant_jobs WHERE actor_id=? AND json_extract(data,'$.taskId')=? ORDER BY rowid DESC LIMIT 20").all(actor.id, taskId) as {data:string}[]).map(row => JSON.parse(row.data) as AssistantJob);
   const current = contextVersion(state, actor, taskId), task = state.tasks.find(t => t.id === taskId);
   for (const job of jobs) {
-    if (['pending', 'running'].includes(job.status) && expired(job)) { failAssistantJob(job.id); Object.assign(job, getJob(job.id)); }
+    if (['pending', 'running'].includes(job.status) && expired(job)) { pendingAssistantJobs(); Object.assign(job, getJob(job.id)); }
     job.stale = Boolean(job.stale) || (job.contextVersion ? job.contextVersion !== current : job.taskVersion !== versionOf(task));
   }
-  return jobs;
+  return jobs.map(job => ({ ...job, attempts: readAttempts(job.id) }));
 }
 export function createAssistantJob(raw: unknown, actor: Employee, available: boolean, execution?: Execution) {
   manager(actor);
   if (!available) throw new WebError(503, 'ИИ не подключён. Руководитель может проверить раздел «Модели и роли». Сейчас доступны сводка и редактируемые шаблоны.');
   const input = z.object({ ...target, question: z.string().trim().min(1).max(2000) }).strict().parse(raw);
-  const state = readState(), task = allowedTask(state, actor, input.taskId), jobId = `web-job:${actor.id}:${input.requestId}`;
-  const previous = getJob(jobId);
-  if (previous) {
-    if (previous.taskId !== input.taskId || previous.question !== input.question || previous.taskVersion !== input.expectedVersion) throw new WebError(409, 'Этот запрос уже использован.');
-    return { ok: true, jobId, duplicate: true };
-  }
-  fresh(task, input.expectedVersion);
-  if (assistantJobs(actor, input.taskId).some(job => job.status === 'pending' || job.status === 'running')) throw new WebError(409, 'По этой задаче уже готовится ответ. Дождитесь его завершения.');
-  const at = new Date().toISOString();
-  putJob({ id: jobId, actorId: actor.id, taskId: task.id, question: input.question, taskVersion: versionOf(task), contextVersion: contextVersion(state, actor, task.id), status: 'pending', createdAt: at, updatedAt: at, ...(execution ? { execution } : {}) });
-  return { ok: true, jobId, duplicate: false };
+  let receipt: { ok: boolean; jobId: string; duplicate: boolean };
+  tables();
+  updateState(state => {
+    const current = state.employees.find(p => p.id === actor.id);
+    if (!current || current.role !== 'manager') throw new WebError(403, 'Нет доступа к консультации.');
+    const task = allowedTask(state, current, input.taskId), jobId = `web-job:${current.id}:${input.requestId}`;
+    const previous = getJob(jobId);
+    if (previous) {
+      if (previous.taskId !== input.taskId || previous.question !== input.question || previous.taskVersion !== input.expectedVersion) throw new WebError(409, 'Этот запрос уже использован.');
+      receipt = { ok: true, jobId, duplicate: true }; return state;
+    }
+    fresh(task, input.expectedVersion);
+    expireAssistantJobs();
+    if (unfinishedJobs().some(job => job.actorId === current.id && job.taskId === task.id)) throw new WebError(409, 'По этой задаче уже готовится ответ. Дождитесь его завершения.');
+    const at = new Date().toISOString();
+    putJob({ id: jobId, actorId: current.id, taskId: task.id, question: input.question, taskVersion: versionOf(task), contextVersion: contextVersion(state, current, task.id), status: 'pending', createdAt: at, updatedAt: at, ...(execution ? { execution } : {}) });
+    receipt = { ok: true, jobId, duplicate: false };
+    return state;
+  });
+  return receipt!;
+}
+function unfinishedJobs(): AssistantJob[] {
+  return (tables().prepare("SELECT data FROM web_assistant_jobs WHERE json_extract(data,'$.status') IN ('pending','running') ORDER BY rowid").all() as {data:string}[]).map(row => JSON.parse(row.data));
+}
+// Called only inside the caller's SQLite write transaction. A started provider
+// request is never requeued: after its lease ends, its outcome remains unknown.
+function rejectJob(job: AssistantJob, reason: NonNullable<AssistantJob['recoveryReason']>) {
+  job.status = 'failed'; job.recoveryReason = reason;
+  markAttemptsUnknown(job.id);
+  job.error = reason === 'execution_uncertain'
+    ? 'Выполнение прервано или истекло время ожидания. Вызов модели мог состояться; автоматически не повторяем. Проверьте результат и при необходимости задайте новый вопрос.'
+    : reason === 'expired' ? 'Запрос истёк до запуска. Проверьте актуальные данные и задайте новый вопрос.'
+    : 'Данные задачи или права изменились до запуска. Обновите карточку и задайте новый вопрос.';
+  job.updatedAt = new Date().toISOString(); putJob(job);
+}
+function expireAssistantJobs() {
+  for (const job of unfinishedJobs()) if (expired(job)) rejectJob(job, job.status === 'running' ? 'execution_uncertain' : 'expired');
+}
+export function pendingAssistantJobs(): string[] {
+  let ids: string[] = [];
+  tables();
+  updateState(state => {
+    expireAssistantJobs();
+    const jobs = unfinishedJobs(), capacity = Math.max(0, 2 - jobs.filter(j => j.status === 'running').length);
+    ids = jobs.filter(j => j.status === 'pending').slice(0, capacity).map(j => j.id);
+    return state;
+  });
+  return ids;
 }
 export function claimAssistantJob(jobId: string): AssistantJob|undefined {
   let claimed: AssistantJob|undefined;
-  updateState(state => { const job = getJob(jobId); if (job?.status === 'pending' && !expired(job)) { job.status = 'running'; job.startedAt = job.updatedAt = new Date().toISOString(); putJob(job); claimed = job; } return state; });
+  tables();
+  updateState(state => {
+    expireAssistantJobs();
+    const job = getJob(jobId);
+    if (job?.status !== 'pending') return state;
+    const actor = state.employees.find(p => p.id === job.actorId);
+    try {
+      if (!actor || actor.role !== 'manager' || contextVersion(state, actor, job.taskId) !== job.contextVersion) throw new Error('Invalid context');
+    } catch { rejectJob(job, 'context_changed'); return state; }
+    if (unfinishedJobs().filter(j => j.status === 'running').length >= 2) return state;
+    job.status = 'running'; job.startedAt = job.updatedAt = new Date().toISOString(); putJob(job); claimed = job;
+    return state;
+  });
   return claimed;
 }
 export function failAssistantJob(jobId: string) {
-  updateState(state => { const job = getJob(jobId); if (job && job.status !== 'completed') { job.status = 'failed'; job.error = 'Ответ ИИ не подтверждён. Память задачи сохранена; можно задать новый вопрос.'; job.updatedAt = new Date().toISOString(); putJob(job); } return state; });
+  updateState(state => { const job = getJob(jobId); if (job && !['completed', 'failed'].includes(job.status)) { markAttemptsUnknown(job.id); job.status = 'failed'; job.error = 'Ответ ИИ не подтверждён. Память задачи сохранена; можно задать новый вопрос.'; job.updatedAt = new Date().toISOString(); putJob(job); } return state; });
 }
 export function recordExecution(ctx: any, execution: Execution) {
   updateState(state => { const job = activeWebJob(ctx); job.execution = execution; job.updatedAt = new Date().toISOString(); putJob(job); return state; });
@@ -220,6 +288,20 @@ function rememberRead(ctx: any, taskId: string, reads: EvidenceRead[], version?:
     if (version) job.contextRead = { version, at: new Date().toISOString() };
     putJob(job); return state;
   });
+}
+export function beginProviderAttempt(ctx: any, roleId: string, call: number, provider: string): AttemptHandle {
+  let handle: AttemptHandle;
+  updateState(state => {
+    const job = activeWebJob(ctx), actor = currentEmployee(ctx);
+    if (contextVersion(state, actor, job.taskId) !== job.contextVersion) throw new WebError(409, 'Контекст консультации изменился.');
+    if (!job.execution?.routes.some(route => route.roleId === roleId && route.provider === provider)) throw new WebError(403, 'Маршрут не принадлежит консультации.');
+    const attempts = readAttempts(job.id);
+    if (attempts.some(a => a.state !== 'response_received')) throw new WebError(409, 'Предыдущая попытка не подтверждена; повтор запрещён.');
+    if (call > 1 && !attempts.some(a => a.roleId === roleId && a.call === call - 1)) throw new WebError(409, 'Неверная последовательность вызовов.');
+    handle = beginAttempt(job.id, roleId, call, provider);
+    return state;
+  });
+  return handle!;
 }
 export function readAssistantContext(ctx: any, taskId: string) {
   if (ctx.session.auth.current?.attributes?.webJobId) activeWebJob(ctx, taskId);

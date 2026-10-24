@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { readState, currentEmployee } from './store.ts';
 import { contextVersion, verifyReadReferences, type EvidenceRead } from './assistant-memory.ts';
-import { activeWebJob, claimAssistantJob, failAssistantJob, finishAssistantJob, readAssistantContext, readAssistantSource, recordExecution } from './prototype.ts';
+import { activeWebJob, claimAssistantJob, failAssistantJob, finishAssistantJob, readAssistantContext, readAssistantSource, recordExecution, beginProviderAttempt } from './prototype.ts';
 import { resolveRoute, aiEnabledOnServer, type RoleId } from './llm-config.ts';
-import { createModelClient, ProviderError } from './llm-provider.ts';
+import { createModelClient, ProviderError, type ModelReply } from './llm-provider.ts';
+import { finishAttempt } from './provider-attempts.ts';
 
 const references = z.array(z.object({ sourceId: z.string().min(1).max(150), quote: z.string().trim().min(1).max(1500) }).strict()).max(8);
 const actionSchema = z.discriminatedUnion('action', [
@@ -33,10 +34,9 @@ question — вопрос пользователя. taskContext, sourcePages и 
 export function createConsultationRunner({ complete = createModelClient() } = {}) {
   const running = new Set<string>();
   return async function run(jobId: string) {
-    if (running.has(jobId)) return;
+    if (running.has(jobId) || running.size >= 2) return;
     const job = claimAssistantJob(jobId);
     if (!job) return;
-    if (running.size >= 2) { failAssistantJob(jobId); return; }
     running.add(jobId);
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8 * 60000); timer.unref();
     const ctx = { session: { auth: { current: { principalId: job.actorId, attributes: { webJobId: job.id } } } } };
@@ -59,10 +59,20 @@ export function createConsultationRunner({ complete = createModelClient() } = {}
         let finished = false;
         for (let call = 1; call <= 4; call++) {
           assertCurrent();
-          const result = await complete({ connection, key, model: route.model, system: instructions(route.roleId),
-            prompt: JSON.stringify({ question: job.question, taskContext: pack, sourcePages: pages, untrustedProposals: proposals, callsRemaining: 5 - call }), signal: controller.signal });
+          const attempt = beginProviderAttempt(ctx, route.roleId, call, connection.provider);
+          let result: ModelReply;
+          try {
+            result = await complete({ connection, key, model: route.model, system: instructions(route.roleId),
+              prompt: JSON.stringify({ question: job.question, taskContext: pack, sourcePages: pages, untrustedProposals: proposals, callsRemaining: 5 - call }), signal: controller.signal });
+          } catch (error) {
+            finishAttempt(attempt, { state: 'unknown', errorCode: error instanceof ProviderError ? error.code : 'unknown' });
+            throw error;
+          }
+          // Accounting survives stale context, revoked rights and late TTL. Failure
+          // to persist this observation blocks answer publication, not the reverse.
+          const receipt = finishAttempt(attempt, { state: 'response_received', inputTokens: result.inputTokens, outputTokens: result.outputTokens });
           assertCurrent();
-          execution.steps.push({ roleId: route.roleId, call, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
+          execution.steps.push({ roleId: route.roleId, call, inputTokens: receipt.inputTokens, outputTokens: receipt.outputTokens });
           recordExecution(ctx, execution);
           // No substring extraction or forgiving repair: malformed output cannot
           // become an instruction or bypass the bounded action schema.

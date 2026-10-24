@@ -78,6 +78,54 @@ test('Реальный исполнитель: три роли с разными
   assert.ok(!JSON.stringify(done).includes('dummy-key'));assert.ok(!JSON.stringify(done).includes('credentialEnv'));assert.equal(store.readState().tasks[0].status,'active');
 });
 
+test('Две сессии: назначение → отчёт исполнителя → свежая сводка → агент с проверенным источником',async()=>{
+  reset();save({coordinator:off,analyst:roles.analyst,reviewer:off});
+  const manager=await signin('boss'),employee=await signin('a');
+  assert.notEqual(manager.cookie,employee.cookie);assert.notEqual(manager.csrf,employee.csrf);
+  const command=fields=>({requestId:randomUUID(),...fields});
+  async function ok(path,body,session){const response=await api(path,body,session),data=await response.json();assert.equal(response.status,200,JSON.stringify(data));return data;}
+  const fields={title:'Материалы совместного пилота',employeeId:'a',due:'2026-12-01',dueTime:'16:30'};
+  const {taskId}=await ok('task-create',command({fields}),manager);
+  const own=await ok('tasks',undefined,employee),assigned=own.tasks.find(t=>t.id===taskId);
+  assert.equal(assigned.title,fields.title);assert.equal(assigned.employeeId,'a');
+  const {taskId:privateId}=await ok('task-create',command({fields:{...fields,title:'Закрытая задача руководителя',employeeId:'boss'}}),manager);
+  assert.ok(!(await ok('tasks',undefined,employee)).tasks.some(t=>t.id===privateId));
+  assert.equal((await api('memory?taskId='+privateId,undefined,employee)).status,404);
+  assert.equal((await api('report',command({taskId:privateId,text:'Есть препятствие: нет данных.'}),employee)).status,404);
+  const text='Есть препятствие: исходные данные не получены. Нужна помощь руководителя.';
+  const report=await ok('report',command({taskId,text}),employee);
+  const fresh=await ok('tasks',undefined,manager),task=fresh.tasks.find(t=>t.id===taskId);
+  assert.equal(task.status,'blocked');assert.notEqual(task.version,assigned.version);
+  assert.ok(fresh.brief.blocked.some(t=>t.sourceId===report.sourceId));
+  assert.equal((await api('task-edit',command({taskId,expectedVersion:assigned.version,fields}),manager)).status,409);
+  const question=()=>command({taskId,expectedVersion:proto.versionOf(store.readState().tasks.find(t=>t.id===taskId)),question:'Как снять препятствие?'});
+  assert.equal((await api('assistant',question(),employee)).status,403);
+  const {jobId}=await ok('assistant',question(),manager);
+  let calls=0;
+  const response=()=>answer('Запросить исходные данные.',[{sourceId:report.sourceId,quote:text}]);
+  await createConsultationRunner({complete:async input=>{
+    calls++;const context=JSON.parse(input.prompt).taskContext;
+    assert.equal(context.taskId,taskId);assert.equal(context.current.status,'blocked');
+    assert.ok(JSON.stringify(context).includes(report.sourceId));
+    assert.ok(!JSON.stringify(context).includes(privateId));
+    return response();
+  }})(jobId);
+  const result=(await ok('assistant?taskId='+taskId,undefined,manager)).jobs.find(j=>j.id===jobId);
+  assert.equal(calls,1);assert.equal(result.status,'completed');assert.equal(result.stale,false);
+  assert.equal(result.references[0].sourceId,report.sourceId);assert.ok(result.references[0].version);
+  // A second employee message arrives while the deterministic adapter is answering.
+  const {jobId:staleId}=await ok('assistant',question(),manager);
+  await createConsultationRunner({complete:async()=>{
+    await ok('report',command({taskId,text:'Препятствие устранено, данные получены.'}),employee);
+    return response();
+  }})(staleId);
+  const jobs=(await ok('assistant?taskId='+taskId,undefined,manager)).jobs;
+  assert.equal(jobs.find(j=>j.id===jobId).stale,true);
+  const stale=jobs.find(j=>j.id===staleId);
+  assert.equal(stale.status,'failed');assert.equal(stale.text,undefined);
+  assert.equal(stale.execution.errorCode,'context_changed');
+});
+
 test('Дочитывание источника ограничено задачей и ролью; неподтверждённые и чужие цитаты не публикуются',async()=>{
   reset();save({coordinator:off,analyst:roles.analyst,reviewer:off});
   store.updateState(s=>{s.sources[0].text='Начало. '+'Подробности. '.repeat(100)+'Нужны исходные данные.';return s;});
@@ -120,13 +168,17 @@ test('Изменение данных/прав во время вызова, о�
   await createConsultationRunner({complete:async()=>{calls++;return answer();}})(id);assert.equal(calls,0);assert.equal(proto.getJob(id).status,'failed');
 });
 
-test('Обычный HTTP-сервер принимает вопрос, запускает выбранную модель и возвращает ответ после повторного запроса',async()=>{
+test('Обычный HTTP-сервер восстанавливает очередь, принимает вопрос и возвращает ответ после повторного запроса',async()=>{
   reset();save({coordinator:off,analyst:roles.analyst,reviewer:off});let calls=0;
+  const recovered=job(); // Persisted before the HTTP worker starts.
   const {createPilotServer}=await import('../scripts/pilot-server.mjs');
   const server=createPilotServer({runConsultation:createConsultationRunner({complete:async input=>{calls++;assert.equal(input.model,'b-model');return answer();}})});
   server.listen(0,'127.0.0.1');await once(server,'listening');process.env.ASSISTANT_SERVER_ORIGIN='http://127.0.0.1:'+server.address().port;
   const url=process.env.ASSISTANT_SERVER_ORIGIN+'/assistant/api/';
   try{
+    const recoveryDeadline=Date.now()+2000;
+    while(proto.getJob(recovered).status!=='completed'){assert.ok(Date.now()<recoveryDeadline);await new Promise(r=>setTimeout(r,5));}
+    assert.equal(calls,1,'Startup executes the saved pending job without a repeated POST');
     const login=await fetch(url+'login',{method:'POST',headers:{origin:process.env.ASSISTANT_SERVER_ORIGIN,'content-type':'application/json'},body:JSON.stringify({code:auth.issueInvite('boss')})});
     const cookie=login.headers.get('set-cookie').split(';')[0],session=await(await fetch(url+'session',{headers:{cookie}})).json();
     const body={requestId:randomUUID(),taskId:'T1',expectedVersion:proto.versionOf(store.readState().tasks[0]),question:'Что делать?'};
@@ -134,7 +186,7 @@ test('Обычный HTTP-сервер принимает вопрос, запу
     const response=await post();assert.equal(response.status,200);const {jobId}=await response.json();
     const deadline=Date.now()+2000;while(proto.getJob(jobId).status==='pending'||proto.getJob(jobId).status==='running'){assert.ok(Date.now()<deadline);await new Promise(r=>setTimeout(r,5));}
     assert.equal((await(await post()).json()).duplicate,true);
-    const result=await(await fetch(url+'assistant?taskId=T1',{headers:{cookie}})).json();assert.equal(result.jobs[0].status,'completed');assert.equal(calls,1);
+    const result=await(await fetch(url+'assistant?taskId=T1',{headers:{cookie}})).json();assert.equal(result.jobs[0].status,'completed');assert.equal(calls,2);
     const tasks=await(await fetch(url+'tasks',{headers:{cookie}})).json();assert.equal(tasks.assistant.mode,'roles');
   }finally{server.close();server.closeAllConnections();await once(server,'close');}
 });
