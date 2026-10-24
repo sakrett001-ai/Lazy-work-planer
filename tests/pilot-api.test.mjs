@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 const dataDir=mkdtempSync(join(tmpdir(),'lazy-pilot-'));
@@ -14,7 +15,7 @@ process.env.ASSISTANT_SERVER_ORIGIN='https://assistant.test';
 process.env.ASSISTANT_DELIVERY_ENABLED='false';
 const store=await import('../agent/lib/store.ts');
 const {handleDashboardRequest}=await import('../agent/lib/dashboard-api.ts');
-const {issueInvite,webTables,session}=await import('../agent/lib/web-auth.ts');
+const {issueInvite,webTables,session,sessionCookie}=await import('../agent/lib/web-auth.ts');
 const {createPilotServer}=await import('../scripts/pilot-server.mjs');
 const state=()=>({employees:[{id:'manager',name:'Руководитель',role:'manager'},{id:'worker',name:'Сотрудник',role:'employee'},{id:'other',name:'Другой сотрудник',role:'employee'}],tasks:[{id:'П-1',title:'Подготовить свод',employeeId:'worker',project:'Пилот',due:'2026-12-10',status:'active',summary:'Ожидаем обновление',contact:'not_requested',needsDecision:false},{id:'Л-1',title:'Личная задача',employeeId:'manager',project:'Личное',status:'active',contact:'not_requested',needsDecision:false},{id:'П-2',title:'Чужое поручение',employeeId:'other',project:'Пилот',status:'active',contact:'not_requested',needsDecision:false}],sources:[],events:[],settings:{timezone:'Europe/Moscow',startHour:9,endHour:18,minHoursBetween:6,excludedDates:[]}});
 function reset(){webTables().exec('DELETE FROM web_sessions; DELETE FROM web_invites; DELETE FROM web_operations; DELETE FROM inbox; DELETE FROM outbox;');store.updateState(()=>state());}
@@ -24,6 +25,42 @@ async function request(path,body,auth,headers={}){
 }
 async function signin(id){const result=await request('login',{code:issueInvite(id)});assert.equal(result.status,200);const cookie=result.headers.get('set-cookie').split(';')[0];const auth=await (await request('session',undefined,{cookie})).json();return {cookie,csrf:auth.csrf,actor:auth.actor};}
 after(()=>{store.database().close();rmSync(dataDir,{recursive:true,force:true});});
+
+test('Cookie namespace follows trusted HTTPS origin; local HTTP login/logout stays usable',async()=>{
+  const previous=process.env.ASSISTANT_SERVER_ORIGIN;
+  try {
+    for (const [origin,name,secure] of [
+      ['https://assistant.test','__Secure-lazy_work_session',true],
+      ['http://127.0.0.1:8787','lazy_work_session',false],
+    ]) {
+      reset();process.env.ASSISTANT_SERVER_ORIGIN=origin;
+      const login=await request('login',{code:issueInvite('worker')},undefined,{'x-forwarded-proto':secure?'http':'https'});
+      assert.equal(login.status,200);
+      const setCookie=login.headers.get('set-cookie');
+      assert.ok(setCookie.startsWith(name+'='));
+      assert.match(setCookie,/; Path=\/assistant; HttpOnly; SameSite=Strict; Max-Age=28800/);
+      assert.equal(setCookie.includes('; Secure'),secure);
+      assert.ok(!setCookie.includes('Domain='));
+      const cookie=setCookie.split(';')[0];
+      const current=await (await request('session',undefined,{cookie})).json();
+      assert.equal(current.actor.id,'worker');
+      const auth={cookie,csrf:current.csrf};
+      const wrongName=secure?'lazy_work_session':'__Secure-lazy_work_session';
+      assert.equal((await request('tasks',undefined,{cookie:cookie.replace(name+'=',wrongName+'=')})).status,401);
+      assert.equal((await request('tasks',undefined,{cookie:cookie+'; '+cookie})).status,401);
+      // A legacy/inapplicable cookie cannot shadow the active namespace.
+      assert.equal((await request('tasks',undefined,{cookie:wrongName+'='+'x'.repeat(43)+'; '+cookie})).status,200);
+      const logout=await request('logout',{},auth);
+      assert.equal(logout.status,200);
+      assert.equal(logout.headers.get('set-cookie'),`${name}=; Path=/assistant; HttpOnly; SameSite=Strict; Max-Age=0${secure?'; Secure':''}`);
+      assert.equal((await request('tasks',undefined,auth)).status,401);
+    }
+    for(const origin of ['http://assistant.test','https://assistant.test/path','https://user:pass@assistant.test']){
+      process.env.ASSISTANT_SERVER_ORIGIN=origin;
+      assert.throws(()=>sessionCookie(),/HTTPS/);
+    }
+  } finally {process.env.ASSISTANT_SERVER_ORIGIN=previous;}
+});
 
 test('Персональный код одноразовый; сеанс защищён, истекает и отзывается при выходе',async()=>{
   reset();assert.equal((await request('tasks')).status,401);
@@ -106,6 +143,13 @@ test('Настоящий HTTP-сервер отдаёт интерфейс и AP
     const code=issueInvite('worker'),login=await fetch(origin+'/assistant/api/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({code})});assert.equal(login.status,200);
     const cookie=login.headers.get('set-cookie').split(';')[0];
     const tasks=await (await fetch(origin+'/assistant/api/tasks',{headers:{cookie}})).json();assert.equal(tasks.tasks[0].id,'П-1');
+    const duplicateCookieStatus=await new Promise((resolve,reject)=>{
+      const req=httpRequest(origin+'/assistant/api/tasks',{headers:['Host',new URL(origin).host,'Cookie',cookie,'Cookie',cookie]},res=>{
+        res.resume();res.on('end',()=>resolve(res.statusCode));
+      });
+      req.on('error',reject);req.end();
+    });
+    assert.equal(duplicateCookieStatus,401,'Duplicate raw Cookie headers cannot authenticate');
     assert.equal((await fetch(origin+'/assistant/../../.env')).status,404);
   } finally {await new Promise(resolve=>server.close(resolve));process.env.ASSISTANT_SERVER_ORIGIN=previous;}
 });

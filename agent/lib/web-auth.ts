@@ -7,7 +7,9 @@ export class WebError extends Error {
 }
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(32).toString('base64url');
-const COOKIE = 'lazy_work_session';
+// Select from trusted server configuration, never request/proxy headers.
+// HTTP is permitted by serverOrigin() only for loopback development.
+const cookieName = () => serverOrigin().startsWith('https:') ? '__Secure-lazy_work_session' : 'lazy_work_session';
 const SESSION_SECONDS = 8 * 60 * 60;
 
 export function webTables() {
@@ -56,8 +58,9 @@ export function login(code: string, at = Date.now()) {
 }
 
 export function session(request: Request, at = Date.now()) {
-  const values = (request.headers.get('cookie') || '').split(';').map(s => s.trim()).filter(s => s.startsWith(COOKIE + '='));
-  const value = values.length === 1 ? values[0].slice(COOKIE.length + 1) : '';
+  const name = cookieName();
+  const values = (request.headers.get('cookie') || '').split(';').map(s => s.trim()).filter(s => s.startsWith(name + '='));
+  const value = values.length === 1 ? values[0].slice(name.length + 1) : '';
   if (!/^[A-Za-z0-9_-]{43}$/.test(value)) throw new WebError(401, 'Войдите в рабочее пространство.');
   const hash = digest(value);
   const row = webTables().prepare('SELECT employee_id, csrf FROM web_sessions WHERE hash = ? AND expires_at > ?').get(hash, at) as { employee_id: string; csrf: string } | undefined;
@@ -72,7 +75,7 @@ export function requireCsrf(request: Request, expected: string) {
 }
 
 export function sessionCookie(value = '') {
-  return `${COOKIE}=${value}; Path=/assistant; HttpOnly; SameSite=Strict; Max-Age=${value ? SESSION_SECONDS : 0}${serverOrigin().startsWith('https:') ? '; Secure' : ''}`;
+  return `${cookieName()}=${value}; Path=/assistant; HttpOnly; SameSite=Strict; Max-Age=${value ? SESSION_SECONDS : 0}${serverOrigin().startsWith('https:') ? '; Secure' : ''}`;
 }
 
 export function logout(hash: string) { webTables().prepare('DELETE FROM web_sessions WHERE hash = ?').run(hash); }

@@ -22,6 +22,7 @@ const assets: Record<string, [string, string]> = {
   '/assistant/pilot.css': ['pilot.css', 'text/css; charset=utf-8'],
   '/assistant/icons.js': ['icons.js', 'text/javascript; charset=utf-8'],
   '/assistant/prototype.css': ['prototype.css', 'text/css; charset=utf-8'],
+  '/assistant/pilot-theme.css': ['pilot-theme.css', 'text/css; charset=utf-8'],
   '/assistant/prototype-ui.js': ['prototype-ui.js', 'text/javascript; charset=utf-8'],
 };
 export const taskVersion = (task: unknown) => digest(JSON.stringify(task));
