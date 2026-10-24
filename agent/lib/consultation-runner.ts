@@ -33,10 +33,9 @@ question — вопрос пользователя. taskContext, sourcePages и 
 export function createConsultationRunner({ complete = createModelClient() } = {}) {
   const running = new Set<string>();
   return async function run(jobId: string) {
-    if (running.has(jobId)) return;
+    if (running.has(jobId) || running.size >= 2) return;
     const job = claimAssistantJob(jobId);
     if (!job) return;
-    if (running.size >= 2) { failAssistantJob(jobId); return; }
     running.add(jobId);
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8 * 60000); timer.unref();
     const ctx = { session: { auth: { current: { principalId: job.actorId, attributes: { webJobId: job.id } } } } };

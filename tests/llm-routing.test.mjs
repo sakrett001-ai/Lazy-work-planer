@@ -168,13 +168,17 @@ test('Изменение данных/прав во время вызова, о�
   await createConsultationRunner({complete:async()=>{calls++;return answer();}})(id);assert.equal(calls,0);assert.equal(proto.getJob(id).status,'failed');
 });
 
-test('Обычный HTTP-сервер принимает вопрос, запускает выбранную модель и возвращает ответ после повторного запроса',async()=>{
+test('Обычный HTTP-сервер восстанавливает очередь, принимает вопрос и возвращает ответ после повторного запроса',async()=>{
   reset();save({coordinator:off,analyst:roles.analyst,reviewer:off});let calls=0;
+  const recovered=job(); // Persisted before the HTTP worker starts.
   const {createPilotServer}=await import('../scripts/pilot-server.mjs');
   const server=createPilotServer({runConsultation:createConsultationRunner({complete:async input=>{calls++;assert.equal(input.model,'b-model');return answer();}})});
   server.listen(0,'127.0.0.1');await once(server,'listening');process.env.ASSISTANT_SERVER_ORIGIN='http://127.0.0.1:'+server.address().port;
   const url=process.env.ASSISTANT_SERVER_ORIGIN+'/assistant/api/';
   try{
+    const recoveryDeadline=Date.now()+2000;
+    while(proto.getJob(recovered).status!=='completed'){assert.ok(Date.now()<recoveryDeadline);await new Promise(r=>setTimeout(r,5));}
+    assert.equal(calls,1,'Startup executes the saved pending job without a repeated POST');
     const login=await fetch(url+'login',{method:'POST',headers:{origin:process.env.ASSISTANT_SERVER_ORIGIN,'content-type':'application/json'},body:JSON.stringify({code:auth.issueInvite('boss')})});
     const cookie=login.headers.get('set-cookie').split(';')[0],session=await(await fetch(url+'session',{headers:{cookie}})).json();
     const body={requestId:randomUUID(),taskId:'T1',expectedVersion:proto.versionOf(store.readState().tasks[0]),question:'Что делать?'};
@@ -182,7 +186,7 @@ test('Обычный HTTP-сервер принимает вопрос, запу
     const response=await post();assert.equal(response.status,200);const {jobId}=await response.json();
     const deadline=Date.now()+2000;while(proto.getJob(jobId).status==='pending'||proto.getJob(jobId).status==='running'){assert.ok(Date.now()<deadline);await new Promise(r=>setTimeout(r,5));}
     assert.equal((await(await post()).json()).duplicate,true);
-    const result=await(await fetch(url+'assistant?taskId=T1',{headers:{cookie}})).json();assert.equal(result.jobs[0].status,'completed');assert.equal(calls,1);
+    const result=await(await fetch(url+'assistant?taskId=T1',{headers:{cookie}})).json();assert.equal(result.jobs[0].status,'completed');assert.equal(calls,2);
     const tasks=await(await fetch(url+'tasks',{headers:{cookie}})).json();assert.equal(tasks.assistant.mode,'roles');
   }finally{server.close();server.closeAllConnections();await once(server,'close');}
 });

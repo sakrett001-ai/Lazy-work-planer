@@ -7,9 +7,11 @@ import { updateState } from '../agent/lib/store.ts';
 import { monitorWorkspace } from '../agent/lib/workspace-monitor.ts';
 import { assistantAvailable } from '../agent/lib/llm-config.ts';
 import { createConsultationRunner } from '../agent/lib/consultation-runner.ts';
+import { createConsultationWorker } from '../agent/lib/consultation-worker.ts';
 
 // Model execution stays outside the shared, side-effect-free dashboard handlers.
 export function createPilotServer({ runConsultation = createConsultationRunner() } = {}) {
+  let worker;
   const server = createServer(async (req, res) => {
     try {
       const origin = serverOrigin();
@@ -26,18 +28,20 @@ export function createPilotServer({ runConsultation = createConsultationRunner()
       const job = req.method === 'POST' && url.pathname === '/assistant/api/assistant' && response.ok ? await response.clone().json() : null;
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));
-      if (job?.jobId) void runConsultation(job.jobId).catch(() => console.error('Консультация не запущена; запрос можно проверить в карточке задачи.'));
+      if (job?.jobId) void worker?.wake().catch(() => console.error('Консультация не запущена; запрос можно проверить в карточке задачи.'));
     } catch { res.writeHead(503, { 'cache-control': 'no-store' }); res.end('Workspace unavailable'); }
   });
   let timer;
   server.on('listening', () => {
+    worker = createConsultationWorker({ runConsultation });
+    void worker.wake().catch(() => console.error('Восстановление очереди консультаций отложено.'));
     timer = setInterval(() => {
       try { updateState(state => monitorWorkspace(state)); }
       catch { console.error('Проверка ожидания ответа отложена: хранилище недоступно.'); }
     }, 60000);
     timer.unref();
   });
-  server.on('close', () => clearInterval(timer));
+  server.on('close', () => { clearInterval(timer); worker?.stop(); });
   return server;
 }
 
