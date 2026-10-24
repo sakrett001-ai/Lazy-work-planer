@@ -9,6 +9,7 @@ import { saveDecisionDraft } from './decisions.ts';
 import { taskMemory } from '../../dist/task-memory.js';
 import { assistantContext, contextVersion, readSourcePage, sourceVersion, mergeEvidenceReads, verifyReadReferences, type EvidenceRead } from './assistant-memory.ts';
 import type { Execution } from './llm-config.ts';
+import { beginAttempt, readAttempts, markAttemptsUnknown, type AttemptHandle } from './provider-attempts.ts';
 
 const id = z.string().trim().min(1).max(150);
 const version = z.string().regex(/^[a-f0-9]{64}$/);
@@ -171,7 +172,7 @@ export function assistantJobs(actor: Employee, taskId: string) {
     if (['pending', 'running'].includes(job.status) && expired(job)) { pendingAssistantJobs(); Object.assign(job, getJob(job.id)); }
     job.stale = Boolean(job.stale) || (job.contextVersion ? job.contextVersion !== current : job.taskVersion !== versionOf(task));
   }
-  return jobs;
+  return jobs.map(job => ({ ...job, attempts: readAttempts(job.id) }));
 }
 export function createAssistantJob(raw: unknown, actor: Employee, available: boolean, execution?: Execution) {
   manager(actor);
@@ -205,6 +206,7 @@ function unfinishedJobs(): AssistantJob[] {
 // request is never requeued: after its lease ends, its outcome remains unknown.
 function rejectJob(job: AssistantJob, reason: NonNullable<AssistantJob['recoveryReason']>) {
   job.status = 'failed'; job.recoveryReason = reason;
+  markAttemptsUnknown(job.id);
   job.error = reason === 'execution_uncertain'
     ? 'Выполнение прервано или истекло время ожидания. Вызов модели мог состояться; автоматически не повторяем. Проверьте результат и при необходимости задайте новый вопрос.'
     : reason === 'expired' ? 'Запрос истёк до запуска. Проверьте актуальные данные и задайте новый вопрос.'
@@ -243,7 +245,7 @@ export function claimAssistantJob(jobId: string): AssistantJob|undefined {
   return claimed;
 }
 export function failAssistantJob(jobId: string) {
-  updateState(state => { const job = getJob(jobId); if (job && !['completed', 'failed'].includes(job.status)) { job.status = 'failed'; job.error = 'Ответ ИИ не подтверждён. Память задачи сохранена; можно задать новый вопрос.'; job.updatedAt = new Date().toISOString(); putJob(job); } return state; });
+  updateState(state => { const job = getJob(jobId); if (job && !['completed', 'failed'].includes(job.status)) { markAttemptsUnknown(job.id); job.status = 'failed'; job.error = 'Ответ ИИ не подтверждён. Память задачи сохранена; можно задать новый вопрос.'; job.updatedAt = new Date().toISOString(); putJob(job); } return state; });
 }
 export function recordExecution(ctx: any, execution: Execution) {
   updateState(state => { const job = activeWebJob(ctx); job.execution = execution; job.updatedAt = new Date().toISOString(); putJob(job); return state; });
@@ -268,6 +270,20 @@ function rememberRead(ctx: any, taskId: string, reads: EvidenceRead[], version?:
     if (version) job.contextRead = { version, at: new Date().toISOString() };
     putJob(job); return state;
   });
+}
+export function beginProviderAttempt(ctx: any, roleId: string, call: number, provider: string): AttemptHandle {
+  let handle: AttemptHandle;
+  updateState(state => {
+    const job = activeWebJob(ctx), actor = currentEmployee(ctx);
+    if (contextVersion(state, actor, job.taskId) !== job.contextVersion) throw new WebError(409, 'Контекст консультации изменился.');
+    if (!job.execution?.routes.some(route => route.roleId === roleId && route.provider === provider)) throw new WebError(403, 'Маршрут не принадлежит консультации.');
+    const attempts = readAttempts(job.id);
+    if (attempts.some(a => a.state !== 'response_received')) throw new WebError(409, 'Предыдущая попытка не подтверждена; повтор запрещён.');
+    if (call > 1 && !attempts.some(a => a.roleId === roleId && a.call === call - 1)) throw new WebError(409, 'Неверная последовательность вызовов.');
+    handle = beginAttempt(job.id, roleId, call, provider);
+    return state;
+  });
+  return handle!;
 }
 export function readAssistantContext(ctx: any, taskId: string) {
   if (ctx.session.auth.current?.attributes?.webJobId) activeWebJob(ctx, taskId);
