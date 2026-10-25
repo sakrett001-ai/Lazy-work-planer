@@ -6,6 +6,54 @@ const fields = { status:'Состояние', summary:'Что известно',
 const base = new URL('./api/', document.baseURI);
 let identity = null, csrf = '', snapshot = null, filter = 'open', selected = null, memory = null, busy = false, refreshing = false, epoch = 0;
 let pendingReport = null, pendingDecision = null;
+let openGeneration=0, detailFlight=null, latestMemory=null, resumeDetail=false;
+const draftText=new Map();
+const draftKey=()=>JSON.stringify([identity?.id,selected]);
+function saveText() {
+  if(!identity||!selected||!document.querySelector('#report-text,#manager-message,#assistant-question'))return;
+  const values={...draftText.get(draftKey())};
+  for(const id of ['report-text','manager-message','assistant-question','manager-request-update']){const input=$('#'+id);if(input)values[id]=input.type==='checkbox'?input.checked:input.value;}
+  draftText.set(draftKey(),values);
+}
+function restoreText() {
+  for(const [id,value] of Object.entries(draftText.get(draftKey())||{}))if(value){
+    const input=$('#'+id);
+    if(input){if(input.type==='checkbox')input.checked=value;else input.value=value;}
+    else if(typeof value==='string') {const label=document.createElement('label');label.textContent='Твой несохранённый текст';const field=document.createElement('textarea');field.readOnly=true;field.value=value;label.append(field);$('#task-content').append(label);}
+  }
+}
+const detailContext=()=>JSON.stringify([epoch,openGeneration,selected,identity?.id,identity?.role]);
+function invalidateDetail(message) {
+  saveText();openGeneration++;latestMemory=null;memory=null;
+  $('#task-content').replaceChildren();
+  const notice=document.createElement('p');notice.setAttribute('role','status');notice.textContent=message;$('#task-content').append(notice);
+  if($('#editor-dialog').open)$('#editor-dialog').close();
+  restoreText();selected=null;
+}
+function validateActor(data) {
+  if(data.currentActor && (data.currentActor.id!==identity?.id || data.currentActor.role!==identity?.role)){
+    saveText();signOut();note('#login-message','Права изменились. Войди снова. Несохранённый текст останется в этом сеансе для прежнего автора.');return false;
+  }
+  return true;
+}
+function actionKey(data){return JSON.stringify([data.taskVersion,data.drafts?.map(d=>[d.id,d.version]),data.children?.map(t=>[t.id,t.version])]);}
+async function pollDetail() {
+  if(detailFlight||!identity||!selected||!memory||busy||document.hidden||!$('#task-dialog').open)return;
+  const context=detailContext(),id=selected;
+  const flight={};detailFlight=flight;
+  try {
+    const fresh=await api('memory?taskId='+encodeURIComponent(id));
+    if(context!==detailContext()||!$('#task-dialog').open||!validateActor(fresh))return;
+    latestMemory=fresh;
+    prototype.appendDetail(fresh);
+    const changed=actionKey(fresh)!==actionKey(memory);
+    $('#reload-detail').hidden=!changed;
+    if(changed)note('#detail-updates','Данные для решения изменились. Обсуждение обновлено; перед действием просмотри актуальную карточку.');
+  }catch(error){if(context===detailContext()){
+    if([401,403,404].includes(error.status))invalidateDetail(error.message);
+    else note('#detail-updates',error.message);
+  }}finally{if(detailFlight===flight)detailFlight=null;if(resumeDetail&&!document.hidden){resumeDetail=false;pollDetail();}}
+}
 
 function date(value, time = false) {
   if (!value) return 'Не задан';
@@ -14,17 +62,20 @@ function date(value, time = false) {
 }
 function note(selector, text, success = false) { const el=$(selector); if (el) { el.textContent=text; el.classList.toggle('success',success); } }
 function signOut() {
-  identity=null; csrf=''; snapshot=null; selected=null; memory=null; epoch++; pendingReport=null; pendingDecision=null;
+  saveText();openGeneration++;latestMemory=null;identity=null; csrf=''; snapshot=null; selected=null; memory=null; epoch++; pendingReport=null; pendingDecision=null;
   $('#workspace').hidden=true; $('#identity').hidden=true; $('#login-panel').hidden=false; $('#loading').hidden=true;
   prototype.reset(); $('#board').replaceChildren(); $('#task-content').replaceChildren(); if ($('#task-dialog').open) $('#task-dialog').close();
 }
 async function api(path, body) {
+  const requestEpoch=epoch,requestContext=detailContext();
   let response;
   try { response=await fetch(new URL(path,base), { credentials:'same-origin', redirect:'error', ...(body === undefined ? {} : { method:'POST', headers:{ 'content-type':'application/json', 'x-csrf-token':csrf }, body:JSON.stringify(body) }) }); }
   catch { throw new Error('Подтверждение не получено: связь прервалась. Повтори действие после восстановления связи.'); }
   let data;
   try { data=await response.json(); } catch { throw new Error('Рабочее подключение недоступно. Открой адрес сервера, который выдал организатор пилота.'); }
-  if (!response.ok) { const error=new Error(data.error || 'Не удалось выполнить действие.'); error.status=response.status; if (response.status===401 && identity) signOut(); throw error; }
+  if (!response.ok) { const error=new Error(data.error || 'Не удалось выполнить действие.'); error.status=response.status; if (requestEpoch===epoch && response.status===401 && identity) signOut();
+    else if([403,404].includes(response.status)&&requestContext===detailContext()&&selected&&(path.startsWith('memory?')||body?.taskId===selected||path.startsWith('assistant?')||path.startsWith('context?')||path.startsWith('source?')))invalidateDetail(error.message);
+    throw error; }
   return data;
 }
 function setBusy(value) {
@@ -56,32 +107,33 @@ async function enter() {
   await refresh();
 }
 const sourceLink = id => { const index=memory?.sources.findIndex(s=>s.id===id)??-1; return index>=0?`<a href="#source-${index}">Сообщение-основание ↗</a>`:''; };
-function sourcesMarkup() { return memory.sources.map((s,i)=>`<article class="source" id="source-${i}"><p>${escape(s.text)}</p><small>${escape(s.authorName||snapshot.employees.find(p=>p.id===s.employeeId)?.name||'Участник')} · ${date(s.occurredAt,true)}${s.simulated?' · пример':''}</small></article>`).join('')||'<p class="report-note">Исходных сообщений пока нет.</p>'; }
-function eventMarkup(event) { return `<div class="history-item"><p>${escape(event.text)}</p>${sourceLink(event.sourceId)}<small>${date(event.at,true)}${event.kind==='late_report'?' · сохранено в истории без изменения текущего состояния':''}</small></div>`; }
+function sourcesMarkup() { return memory.sources.map((s,i)=>`<article class="source" id="source-${i}"><p>${escape(s.text)}</p><small>${escape(s.authorName||snapshot.employees.find(p=>p.id===s.employeeId)?.name||'Участник')} · ${date(s.occurredAt,true)}${s.simulated?' · пример':''}</small></article>`).join('')||'<p class="report-note" data-empty-sources>Исходных сообщений пока нет.</p>'; }
+function eventMarkup(event) { return `<div class="history-item" data-event-key="${escape(event.key)}"><p>${escape(event.text)}</p>${sourceLink(event.sourceId)}<small>${date(event.at,true)}${event.kind==='late_report'?' · сохранено в истории без изменения текущего состояния':''}</small></div>`; }
 function renderMemory() {
   if (!selected || !memory || !identity) return;
   $('#task-content').innerHTML=prototype.detailMarkup();
   setBusy(busy); prototype.detailMounted();
 }
 async function openTask(id) {
-  selected=id; memory=null; const version=epoch;
+  saveText();selected=id; memory=null;latestMemory=null;openGeneration++;const context=detailContext();
   $('#task-content').innerHTML='<h2 id="task-title">Загружаем память задачи…</h2><p id="detail-message" class="message" role="status"></p>';
   if (!$('#task-dialog').open) $('#task-dialog').showModal();
-  try { const data=await api('memory?taskId='+encodeURIComponent(id)); if (version===epoch && selected===id) {memory=data;renderMemory();} }
-  catch(error) { note('#detail-message',error.message); }
+  try { const data=await api('memory?taskId='+encodeURIComponent(id)); if (context===detailContext() && $('#task-dialog').open && validateActor(data)) {memory=data;renderMemory();restoreText();} }
+  catch(error) { if(context===detailContext()){if([401,403,404].includes(error.status))invalidateDetail(error.message);else note('#detail-message',error.message);} }
 }
 async function older() {
   if (!memory?.page.nextBefore) return;
-  const id=selected, version=epoch, button=$('#older'); button.disabled=true;
+  const id=selected, version=epoch, context=detailContext(), button=$('#older'); button.disabled=true;
   try { const data=await api('memory?taskId='+encodeURIComponent(id)+'&before='+encodeURIComponent(memory.page.nextBefore));
-    if (version!==epoch || id!==selected || !memory) return;
+    if (version!==epoch || context!==detailContext() || id!==selected || !memory || !validateActor(data)) return;
     for (const source of data.sources) if (!memory.sources.some(s=>s.id===source.id)) memory.sources.push(source);
     $('#sources').innerHTML=sourcesMarkup();
-    $('#timeline').insertAdjacentHTML('beforeend',data.timeline.map(eventMarkup).join('')); memory.page=data.page;
+    const keys=new Set([...$('#timeline').querySelectorAll('[data-event-key]')].map(el=>el.dataset.eventKey));
+    $('#timeline').insertAdjacentHTML('beforeend',data.timeline.filter(e=>!keys.has(e.key)).map(eventMarkup).join('')); memory.page=data.page;
     if (!data.page.nextBefore) button.remove();
   } catch(error) {note('#detail-message',error.message);} finally {button.disabled=false;}
 }
-const prototype=installPrototype({api, refresh, openTask, renderBoard, note, setBusy, date, sourcesMarkup, sourceLink, eventMarkup, busy:()=>busy, get:()=>({identity,snapshot,selected,memory,filter})});
+const prototype=installPrototype({api, pollDetail, detailContext, refresh, openTask, renderBoard, note, setBusy, date, sourcesMarkup, sourceLink, eventMarkup, busy:()=>busy, get:()=>({identity,snapshot,selected,memory,filter})});
 $('#login-form').addEventListener('submit',async event=>{
   event.preventDefault(); if(busy)return; setBusy(true); note('#login-message','');
   try { await api('login',{code:$('#login-code').value.trim()}); $('#login-code').value=''; await enter(); }
@@ -94,7 +146,7 @@ document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListen
 $('#board').addEventListener('click',event=>{const button=event.target.closest('[data-task]');if(button&&!busy)openTask(button.dataset.task);});
 $('#close-dialog').addEventListener('click',()=>{if(!busy)$('#task-dialog').close();});
 $('#task-dialog').addEventListener('cancel',event=>{if(busy)event.preventDefault();});
-$('#task-dialog').addEventListener('close',()=>{selected=null;memory=null;});
+$('#task-dialog').addEventListener('close',()=>{saveText();openGeneration++;selected=null;memory=null;latestMemory=null;});
 $('#task-dialog').addEventListener('click',async event=>{
   if(event.target.closest('#older')){if(!busy)await older();return;}
   const button=event.target.closest('[data-decision]');if(!button||busy||!memory)return;
@@ -102,7 +154,7 @@ $('#task-dialog').addEventListener('click',async event=>{
   if(!pendingDecision||JSON.stringify(pendingDecision.input)!==JSON.stringify(input))pendingDecision={input,requestId:crypto.randomUUID()};
   setBusy(true);const id=selected;
   try {await api('decision',{...input,requestId:pendingDecision.requestId});pendingDecision=null;await refresh();await openTask(id);note('#detail-message','Решение сохранено в истории.',true);}
-  catch(error){if(error.status===409){pendingDecision=null;await refresh().catch(()=>{});await openTask(id);}note('#detail-message',error.message);}
+  catch(error){if(error.status===409){pendingDecision=null;$('#reload-detail').hidden=false;await refresh().catch(()=>{});}note('#detail-message',error.message);}
   finally{setBusy(false);}
 });
 $('#task-dialog').addEventListener('submit',async event=>{
@@ -110,10 +162,11 @@ $('#task-dialog').addEventListener('submit',async event=>{
   const input={taskId:selected,text:$('#report-text').value.trim()};if(!input.text)return;
   if(!pendingReport||JSON.stringify(pendingReport.input)!==JSON.stringify(input))pendingReport={input,requestId:crypto.randomUUID()};
   setBusy(true);const id=selected;
-  try {const result=await api('report',{...input,requestId:pendingReport.requestId});pendingReport=null;await refresh();await openTask(id);note('#detail-message',result.reply||'Обновление сохранено.',true);}
+  try {const result=await api('report',{...input,requestId:pendingReport.requestId});pendingReport=null;$('#report-text').value='';await refresh();await openTask(id);note('#detail-message',result.reply||'Обновление сохранено.',true);}
   catch(error){note('#detail-message',error.message);}
   finally{setBusy(false);}
 });
 const poll=setInterval(()=>{if(identity&&prototype.canRefresh())refresh().catch(error=>note('#workspace-message',error.message));},15000);
-window.addEventListener('pagehide',()=>clearInterval(poll));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(detailFlight)resumeDetail=true;else pollDetail();}});
+window.addEventListener('pagehide',()=>{openGeneration++;clearInterval(poll);});
 enter().catch(error=>{if(!identity)signOut();if(error.status!==401)note(identity?'#workspace-message':'#login-message',error.message);});

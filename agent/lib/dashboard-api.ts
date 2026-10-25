@@ -81,7 +81,7 @@ async function route(request: Request, options: DashboardOptions) {
     if (!canReadTask(actor, state.tasks.find(t => t.id === taskId))) throw new WebError(404, 'Задача не найдена.');
     const task = state.tasks.find(t => t.id === taskId);
     const memory: any = taskMemory(state, actor, taskId, { before: url.searchParams.get('before'), limit: 20 });
-    return json({ ...memory, taskVersion: taskVersion(task), task: visibleTask(state, actor, task), children: actor.role === 'manager' ? state.tasks.filter(t => t.parentId === taskId).map(t => ({...t,version:taskVersion(t)})) : [], suggestion: actor.role === 'manager' ? proposal(task) : null,
+    return json({ ...memory, currentActor: { id: actor.id, role: actor.role || 'employee' }, taskVersion: taskVersion(task), task: visibleTask(state, actor, task), children: actor.role === 'manager' ? state.tasks.filter(t => t.parentId === taskId).map(t => ({...t,version:taskVersion(t)})) : [], suggestion: actor.role === 'manager' ? proposal(task) : null,
       drafts: actor.role === 'manager' ? (state.decisionDrafts || []).filter(d => d.taskId === taskId).slice(-30).map((draft: any) => ({ ...draft, version: versionOf(draft) })) : [],
       conversation: state.sources.filter(s => s.taskId === taskId).slice(-50).map(s => ({ ...s, authorName: s.authorName || state.employees.find(p => p.id === s.employeeId)?.name || 'Участник' })) });
   }

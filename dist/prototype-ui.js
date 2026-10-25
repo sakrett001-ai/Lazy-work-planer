@@ -145,17 +145,59 @@ export function installPrototype(ctx) {
     const original=Object.hasOwn(task,'originalDue')?(task.originalDue?`${ctx.date(task.originalDue)} · ${esc(task.originalDueTime||'18:00')} мск`:'При постановке срок не задан'):'Первоначальный срок не зафиксирован';
     return `<section class="detail-section delegation"><div class="section-heading"><h3>Дочерние поручения · ${done}/${children.length} принято</h3>${task.status!=='done'?smallButton('data-new-child','+ Поручение исполнителю'):''}</div><p class="report-note">Ответственность за результат остаётся у исполнителя родительского поручения. Дочерние поручения — не последовательные этапы и не закрывают родителя автоматически.</p><p class="report-note">Первоначальный срок: ${original}. Текущий: ${task.due?ctx.date(task.due)+' · '+esc(task.dueTime||'18:00')+' мск':'не задан'}. ${esc(interval(task).text)}</p>${task.parentId?`<p class="report-note">Родительское поручение: ${smallButton(`data-child-open="${esc(task.parentId)}"`,esc(task.parentId))}</p>`:''}${children.map(child=>`<article class="child-task"><button type="button" class="quiet" data-child-open="${esc(child.id)}"><strong>${esc(child.title)}</strong><small>${esc(child.id)} · ${esc(person(child.employeeId))}</small></button><p>${esc(labels[child.status]||child.status)} · ${child.due?ctx.date(child.due)+' · '+esc(child.dueTime||'18:00')+' мск':'Без срока'} · ${esc(interval(child).text)}</p><p>${esc(child.blocker||child.summary||'Ожидаем обновление')}</p></article>`).join('')||'<p class="report-note">Можно распределить части работы между исполнителями, сохранив общий срок и ответственность.</p>'}</section>`;
   }
+  function conversationMarkup(source) {
+    return `<article data-conversation-source="${esc(source.id)}" class="bubble ${source.kind==='manager_message'?'from-manager':''}"><small>${esc(source.authorName)} · ${ctx.date(source.occurredAt||source.receivedAt,true)}</small><p>${esc(source.text)}</p></article>`;
+  }
+  function systemEventMarkup(event) {
+    return `<article data-conversation-event="${esc(event.key)}" class="report-note"><small>Событие системы · ${ctx.date(event.at,true)}</small><p>${esc(event.text)}</p><small>Это не ответ сотрудника и не подтверждение прогресса.</small></article>`;
+  }
+  function appendDetail(fresh) {
+    const box=$('.conversation');if(!box)return;
+    const dialog=$('#task-dialog'),top=dialog.scrollTop,conversationTop=box.scrollTop;
+    const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);
+    const tail=box.scrollHeight-box.clientHeight-conversationTop<32;
+    const anchor=[...dialog.querySelectorAll('.conversation,textarea,summary,.detail-header,.history-item,.source')].find(el=>el.getBoundingClientRect().bottom>dialog.getBoundingClientRect().top);
+    const anchorTop=anchor?.getBoundingClientRect().top;
+    const sourceIds=new Set([...box.querySelectorAll('[data-conversation-source]')].map(el=>el.dataset.conversationSource));
+    const incoming=fresh.conversation||[];
+    if(incoming.length===50 && (!sourceIds.size || !incoming.some(s=>sourceIds.has(s.id)))){
+      $('#conversation-gap').hidden=false;
+    }
+    const added=incoming.filter(s=>!sourceIds.has(s.id));
+    if(added.length){box.querySelector('[data-empty-conversation]')?.remove();box.insertAdjacentHTML('beforeend',added.map(conversationMarkup).join(''));}
+    const eventIds=new Set([...box.querySelectorAll('[data-conversation-event]')].map(el=>el.dataset.conversationEvent));
+    const events=fresh.timeline.filter(e=>e.kind==='no_reply'&&!eventIds.has(e.key));
+    box.insertAdjacentHTML('beforeend',events.slice().reverse().map(systemEventMarkup).join(''));
+    // Add source references without changing the action snapshot/version or existing nodes.
+    let addedSources=0;
+    for(const source of fresh.sources)if(!state().memory.sources.some(s=>s.id===source.id)){
+      addedSources++;$('#sources [data-empty-sources]')?.remove();state().memory.sources.push(source);
+      const template=document.createElement('template');template.innerHTML=ctx.sourcesMarkup();
+      const node=template.content.lastElementChild;if(node)$('#sources').append(node);
+    }
+    const keys=new Set([...$('#timeline').querySelectorAll('[data-event-key]')].map(el=>el.dataset.eventKey));
+    const newEvents=fresh.timeline.filter(e=>!keys.has(e.key));
+    $('#timeline').insertAdjacentHTML('afterbegin',newEvents.map(ctx.eventMarkup).join(''));
+    if(added.length||events.length){
+      message('#conversation-updates',`Новых сообщений: ${added.length}. Событий системы: ${events.length}.`);
+    }
+    if(added.length||newEvents.length||addedSources){
+      box.scrollTop=tail&&!typing?box.scrollHeight:conversationTop;
+      if(anchor?.isConnected)dialog.scrollTop+=anchor.getBoundingClientRect().top-anchorTop;
+      else dialog.scrollTop=top;
+    }
+  }
   function detailMarkup() {
     const {memory,identity,selected}=state(), task=selectedTask(), current=memory.current, own=task.employeeId===identity.id&&current.status!=='done';
     const actions=manager()?[...(current.proposedDue?[['approve_due','Согласовать срок'],['reject_due','Сохранить прежний срок']]:[]),...(current.status==='review'?[['accept','Принять результат']]:[]),...(task.needsDecision&&current.status!=='review'&&!current.proposedDue?[['take_control','Взять вопрос в работу']]:[])]:[];
     const extras=manager()?({planned:[['start','Начать работу']],blocked:[['unblock','Препятствие устранено']],review:[['rework','Вернуть на доработку']],done:[['reopen','Вернуть в работу']]}[current.status]||[]):[];
     const phases=task.phases||[], suggested=memory.suggestion;
     return `<header class="detail-header"><span class="eyebrow">${esc(selected)} · ${esc(labels[current.status]||current.status)}</span><h2 id="task-title">${esc(memory.title)}</h2><p>${esc(person(task.employeeId))} · ${esc(task.project||'Мои поручения')} · ${ctx.date(current.due)}${current.due?' · '+esc(task.dueTime||'18:00')+' мск':''}</p>${task.description?`<p class="task-description">${esc(task.description)}</p>`:''}<div class="actions">${manager()&&current.status!=='done'?smallButton('data-edit-task','Изменить поручение'):''}${extras.map(([action,label])=>smallButton(`data-task-action="${action}"`,label)).join('')}</div></header>
-      <p id="detail-message" class="message" role="status" aria-live="polite"></p><button type="button" id="reload-detail" class="secondary" hidden>В задаче есть обновления · показать</button>
+      <p id="detail-message" class="message" role="status" aria-live="polite"></p><p id="detail-updates" class="report-note" role="status" aria-live="polite"></p><button type="button" id="reload-detail" class="secondary" hidden>В задаче есть обновления · показать</button>
       ${delegationMarkup(task)}
       ${actions.length?`<section class="decision-box"><h3>Нужно твоё решение</h3><p>${current.proposedDue?`Предложено: ${ctx.date(current.proposedDue)}. Действующий срок: ${ctx.date(current.due)}.`:esc(task.blocker||task.summary||'Проверь результат и основания.')}</p><div class="actions">${actions.map(([action,label])=>smallButton(`data-decision="${action}"`,label)).join('')}</div><small>Решение изменит задачу и останется в истории.</small></section>`:''}
-      <section class="detail-section"><h3>Обсуждение задачи</h3><div class="conversation">${(memory.conversation||[]).map(s=>`<article class="bubble ${s.kind==='manager_message'?'from-manager':''}"><small>${esc(s.authorName)} · ${ctx.date(s.occurredAt||s.receivedAt,true)}</small><p>${esc(s.text)}</p></article>`).join('')||'<p class="report-note">Обсуждение начнётся с первого сообщения.</p>'}</div>
-      ${own?`<form id="report-form"><label for="report-text">Что готово и где нужна помощь?</label><textarea id="report-text" maxlength="4000" required placeholder="Например: ожидаем исходные данные, нужна помощь…"></textarea><p class="report-note">Ответ сохраняется вместе с источником. Разбор статуса сейчас выполняется по правилам; приёмку и перенос подтверждает руководитель.</p><button class="primary" type="submit">Сообщить статус ↗</button></form>`:manager()&&current.status!=='done'?`<form id="message-form"><label for="manager-message">Сообщение исполнителю</label><textarea id="manager-message" name="text" maxlength="4000" required placeholder="Уточни готовый результат или предложи следующий шаг…"></textarea><label class="check-label"><input type="checkbox" name="requestUpdate"> Запросить обновление статуса</label><button class="primary" type="submit">Добавить в обсуждение ↗</button><small class="report-note">Сообщение появится у исполнителя в этой задаче.</small></form>`:''}</section>
+      <section class="detail-section"><h3>Обсуждение задачи</h3><p id="conversation-updates" class="report-note" role="status" aria-live="polite"></p><p id="conversation-gap" class="report-note" ${(memory.conversation||[]).length===50?'':'hidden'}>Сервер показывает последние 50 сообщений. Более ранние сообщения или промежуток между обновлениями могут отсутствовать здесь. Более ранние события доступны в разделе истории; это не полная история обсуждения.</p><div class="conversation">${(memory.conversation||[]).map(conversationMarkup).join('')||'<p class="report-note" data-empty-conversation>Обсуждение начнётся с первого сообщения.</p>'}${memory.timeline.filter(e=>e.kind==='no_reply').slice().reverse().map(systemEventMarkup).join('')}</div>
+      ${own?`<form id="report-form"><label for="report-text">Что готово и где нужна помощь?</label><textarea id="report-text" maxlength="4000" required placeholder="Например: ожидаем исходные данные, нужна помощь…"></textarea><p class="report-note">Ответ сохраняется вместе с источником. Разбор статуса сейчас выполняется по правилам; приёмку и перенос подтверждает руководитель.</p><button class="primary" type="submit">Сообщить статус ↗</button></form>`:manager()&&current.status!=='done'?`<form id="message-form"><label for="manager-message">Сообщение исполнителю</label><textarea id="manager-message" name="text" maxlength="4000" required placeholder="Уточни готовый результат или предложи следующий шаг…"></textarea><label class="check-label"><input type="checkbox" id="manager-request-update" name="requestUpdate"> Запросить обновление статуса</label><button class="primary" type="submit">Добавить в обсуждение ↗</button><small class="report-note">Сообщение появится у исполнителя в этой задаче.</small></form>`:''}</section>
       ${manager()?`<section class="detail-section assistant-section"><span class="eyebrow">Ассистент · следующий шаг</span><h3>${esc(suggested?.title||'Подготовить решение')}</h3><p>${esc(suggested?.detail||'')}</p><div class="actions">${Object.entries(draftNames).map(([kind,label])=>smallButton(`data-template="${kind}"`,label)).join('')}</div><p class="report-note">Эти кнопки создают редактируемые шаблоны на основе карточки. Сроки и отправки остаются отдельными действиями.</p>
       <details class="context-preview"><summary>Что получит ассистент</summary><p class="report-note">Текущие факты, открытые вопросы и фрагменты сообщений. Полные источники доступны для дочитывания.</p>${smallButton('id="preview-context"','Показать контекст')}<div id="context-preview-content"></div></details>
       <details class="ai-consultation" ${state().snapshot.assistant.available?'open':''}><summary>Обсудить с ИИ</summary>${state().snapshot.assistant.available?`<form id="assistant-form"><label for="assistant-question">Какое решение нужно подготовить?</label><textarea id="assistant-question" name="question" maxlength="2000" required placeholder="Предложи варианты снятия препятствия и подготовь письмо…"></textarea><button type="submit" class="secondary">Получить варианты ✦</button></form>`:'<p class="report-note">Чтобы включить консультации, настрой подключение в разделе «Модели и роли». Пока доступны сводка, обсуждение и шаблоны.</p>'}<div id="assistant-jobs"></div></details></section>`:''}
@@ -178,7 +220,7 @@ export function installPrototype(ctx) {
       if(after)after(result);
       await ctx.refresh();
       const task=['pin','notice'].includes(path)?null:result.taskId||taskId;
-      if(task) {await ctx.openTask(task);message('#detail-message',result.alreadyPending?'Запрос уже ожидает ответа. Новое сообщение не добавлено.':'Сохранено.',true);}
+      if(task) {if(path==='message'&&$('#manager-message'))$('#manager-message').value='';await ctx.openTask(task);message('#detail-message',result.alreadyPending?'Запрос уже ожидает ответа. Новое сообщение не добавлено.':'Сохранено.',true);}
       else message('#workspace-message','Сохранено.',true);
       return result;
     } catch(error) { message(saved?'#workspace-message':messageTarget,saved?'Изменение сохранено. Обнови данные, когда связь восстановится.':error.message,saved); }
@@ -280,30 +322,20 @@ export function installPrototype(ctx) {
   }
   async function loadJobs() {
     const {selected,identity}=state();if(!selected||!identity||!manager()||!$('#assistant-jobs'))return;
-    const id=selected, actorId=identity.id; jobsFor=id;
-    try { const data=await ctx.api('assistant?taskId='+encodeURIComponent(id));if(state().selected!==id||state().identity?.id!==actorId||!$('#assistant-jobs'))return;
+    const id=selected, actorId=identity.id, context=ctx.detailContext(); jobsFor=id;
+    try { const data=await ctx.api('assistant?taskId='+encodeURIComponent(id));if(context!==ctx.detailContext()||state().selected!==id||state().identity?.id!==actorId||!$('#assistant-jobs'))return;
       const box=$('#assistant-jobs'),signature=JSON.stringify(data.jobs);if(jobViews.get(box)===signature)return;
       box.innerHTML=data.jobs.map(job=>`<article class="ai-result"><small>${ctx.date(job.createdAt,true)} · ${({pending:'В очереди',running:'Ассистент работает',completed:'Ответ подготовлен',failed:'Требуется повторный запрос'})[job.status]}</small><h4>${esc(job.question)}</h4>${executionMarkup(job)}${job.stale?'<p class="message">В задаче появились новые сведения. Сверь ответ с актуальной памятью или задай новый вопрос.</p>':''}<p>${esc(job.text||job.error||'Можно продолжать работать с доской.')}</p>${(job.references||[]).map(ref=>`<blockquote>${esc(ref.quote)}<small>Цитата из сообщения по задаче</small>${sourceReader(ref.sourceId,ref.version)}</blockquote>`).join('')}</article>`).join('');
       jobViews.set(box,signature);
-    } catch(error) {if(state().selected===id&&state().identity?.id===actorId&&$('#assistant-jobs')){jobViews.delete($('#assistant-jobs'));$('#assistant-jobs').textContent=error.message;}}
+    } catch(error) {if(context===ctx.detailContext()&&state().selected===id&&state().identity?.id===actorId&&$('#assistant-jobs')){jobViews.delete($('#assistant-jobs'));$('#assistant-jobs').textContent=error.message;}}
   }
-  async function checkDetail() {
-    const {selected,identity,memory}=state();if(!selected||!identity||!memory||ctx.busy()||document.hidden||!$('#task-dialog').open)return;
-    const id=selected,actorId=identity.id;
-    try {
-      const fresh=await ctx.api('memory?taskId='+encodeURIComponent(id));
-      if(state().selected!==id||state().identity?.id!==actorId||!$('#reload-detail'))return;
-      const key=data=>JSON.stringify([data.taskVersion,data.conversation?.at(-1)?.id,data.drafts?.map(d=>d.version),data.timeline?.[0]?.key,data.children?.map(t=>[t.id,t.version])]);
-      $('#reload-detail').hidden=key(fresh)===key(state().memory);
-    }catch(error){if(state().selected===id)message('#detail-message',error.message);}
-  }
+  async function checkDetail() { return ctx.pollDetail?.(); }
   async function reloadDetail() {
     if(ctx.busy())return;
-    const id=state().selected,values=Object.fromEntries(['report-text','manager-message','assistant-question'].map(key=>[key,$('#'+key)?.value||'']));
+    const id=state().selected;
     ctx.setBusy(true);
-    try {await ctx.refresh();await ctx.openTask(id);
-      for(const [key,value] of Object.entries(values)){if(!value)continue;if($('#'+key))$('#'+key).value=value;else $('#task-content').insertAdjacentHTML('beforeend',`<section class="detail-section"><h3>Твой несохранённый текст</h3><p class="report-note">Состояние задачи изменилось. Скопируй текст, если он ещё нужен.</p><textarea readonly>${esc(value)}</textarea></section>`);}
-    }catch(error){message('#detail-message',error.message);}finally{ctx.setBusy(false);}
+    try {await ctx.refresh();await ctx.openTask(id);}
+    catch(error){message('#detail-message',error.message);}finally{ctx.setBusy(false);}
   }
   function teamEditor() {
     openEditor('Участники прототипа',`<form id="automation-form"><label class="check-label"><input name="enabled" type="checkbox" ${state().snapshot.autoCheckins?'checked':''}> Ассистент запрашивает статусы в приложении</label><p class="report-note">По будням, 09:00–18:00 по Москве; не чаще раза в 6 часов. Свежий ответ откладывает следующий запрос. Это сообщения внутри задач.</p><button type="submit" class="secondary">Сохранить режим</button></form><div id="team-list">${state().snapshot.employees.map(p=>`<div class="person-row"><div><strong>${esc(p.name)}</strong><small>${p.role==='manager'?'Руководитель':'Сотрудник'}</small></div>${p.role!=='manager'||p.id===state().identity.id?smallButton(`data-invite="${esc(p.id)}"`,'Код входа'):''}</div>`).join('')}</div><div id="invite-result" role="status"></div><form id="person-editor"><h3>Добавить сотрудника</h3>${input('name','Имя','','text','required maxlength="120"')}<button class="primary" type="submit">Добавить</button></form>`);
@@ -455,7 +487,7 @@ export function installPrototype(ctx) {
   });
   const rotation=setInterval(()=>{if(auto&&state().identity&&canRefresh()){view=({board:'calendar',calendar:'gantt',gantt:'board'})[view];ctx.renderBoard();}},30000);
   const jobsTimer=setInterval(()=>{if(jobsFor&&state().identity&&!document.hidden&&$('#task-dialog').open&&!ctx.busy())loadJobs();},6000);
-  const detailTimer=setInterval(()=>{refreshCardTime();checkDetail();},15000);
+  const detailTimer=setInterval(()=>{refreshCardTime();return checkDetail();},15000);
   window.addEventListener('pagehide',()=>{pulseController.destroy();document.removeEventListener('visibilitychange',syncVisibility);clearInterval(rotation);clearInterval(jobsTimer);clearInterval(detailTimer);const field=$('#connection-editor input[name="apiKey"]');if(field){field.value='';field.form.dataset.requestId=crypto.randomUUID();}});
-  return {renderBoard,detailMarkup,detailMounted:loadJobs,canRefresh,isImportant:important,reset(){pending.clear();jobsFor=null;auto=false;view='board';lastSignal='';$('#murmuration').checked=false;if($('#editor-dialog').open)$('#editor-dialog').close();$('#brief-text').textContent='';}};
+  return {renderBoard,detailMarkup,appendDetail,detailMounted:loadJobs,canRefresh,isImportant:important,reset(){pending.clear();jobsFor=null;auto=false;view='board';lastSignal='';$('#murmuration').checked=false;if($('#editor-dialog').open)$('#editor-dialog').close();$('#brief-text').textContent='';}};
 }
