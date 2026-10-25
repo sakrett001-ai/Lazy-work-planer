@@ -87,6 +87,16 @@ test('Закрепления и «замечено» персональны и �
   await ok('notice',command({...await target('Т-1',boss)}),boss);
   assert.deepEqual(store.readState(),before);
   assert.deepEqual((await ok('tasks',undefined,boss)).preferences.pins,['Т-1']);assert.deepEqual((await ok('tasks',undefined,a)).preferences.pins,[]);
+  const bossSecond=await signin('boss'),aSecond=await signin('a');
+  const managerPrefs=(await ok('tasks',undefined,boss)).preferences;
+  const employeePrefs=(await ok('tasks',undefined,a)).preferences;
+  for(const session of [boss,bossSecond,a,aSecond]){
+    const read=await ok('memory?taskId='+encodeURIComponent('Т-1'),undefined,session);
+    assert.deepEqual(read.currentActor,{id:session.actor.id,role:session.actor.role});
+    const prefs=(await ok('tasks',undefined,session)).preferences;
+    assert.deepEqual(prefs,session.actor.id==='boss'?managerPrefs:employeePrefs,'Two views share only their own actor preferences; memory polling is not a read receipt');
+  }
+  assert.deepEqual(employeePrefs.seen,{});assert.notDeepEqual(managerPrefs.seen,employeePrefs.seen);
   assert.equal((await request('pin',command({taskId:'Т-1',pinned:true}),b)).status,404);
 });
 

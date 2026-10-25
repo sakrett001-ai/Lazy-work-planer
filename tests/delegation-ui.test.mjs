@@ -16,9 +16,10 @@ test('Delegation/report UI: explicit child assignment, immutable safe report, sa
   const child={id:'C1',parentId:'P1',title:'Собрать факты',employeeId:'b',status:'blocked',due:'2026-10-22',dueTime:'12:00',version:'child-v1',blocker:'Нет исходных данных'};
   const memory={task:root,title:root.title,taskVersion:root.version,current:{...root},children:[child],conversation:[],facts:[],drafts:[],timeline:[],page:{},graph:{edges:[],nodes:[]}};
   const state={identity:{id:'boss',role:'manager'},selected:'P1',memory,filter:'open',snapshot:{tasks:[root,child],employees:[{id:'boss',name:'Руководитель'},{id:'a',name:'Ответственный'},{id:'b',name:'Исполнитель'}],preferences:{pins:[],seen:{}},assistant:{available:false},brief:{text:'Сводка'}}};
+  let polls=0;
   let busy=false,lose=true,proto,freshMemory=memory,deferredList=null;const writes=[];
   const snapshot={id:'R1',createdAt:'2026-10-24T12:00:00Z',text:'Отчёт на 24 октября\n<img src=x onerror=bad()>\nПросрочено. Нет исходных данных.'};
-  const ctx={get:()=>state,busy:()=>busy,setBusy:v=>{busy=v;},date:v=>v,note:(selector,text)=>{d.querySelector(selector).textContent=text;},sourceLink:()=>'',sourcesMarkup:()=>'',eventMarkup:()=>'',refresh:async()=>{},openTask:async()=>{},renderBoard(){d.querySelector('#board').innerHTML=proto.renderBoard(state.snapshot.tasks);},api:async(path,body)=>{
+  const ctx={pollDetail:async()=>{polls++;},get:()=>state,busy:()=>busy,setBusy:v=>{busy=v;},date:v=>v,note:(selector,text)=>{d.querySelector(selector).textContent=text;},sourceLink:()=>'',sourcesMarkup:()=>'',eventMarkup:()=>'',refresh:async()=>{},openTask:async()=>{},renderBoard(){d.querySelector('#board').innerHTML=proto.renderBoard(state.snapshot.tasks);},api:async(path,body)=>{
     if(path==='reports')return deferredList||{reports:[]};
     if(path==='reports?id=R1')return {report:snapshot};
     if(path.startsWith('memory?'))return structuredClone(freshMemory);
@@ -36,7 +37,7 @@ test('Delegation/report UI: explicit child assignment, immutable safe report, sa
     submit('#task-editor');await wait(()=>!busy);
     assert.equal(writes[0].path,'task-create');assert.equal(writes[0].parentId,'P1');assert.equal(writes[0].expectedParentVersion,'root-v1');assert.equal(writes[0].fields.employeeId,'b');assert.equal(writes[0].fields.due,'2026-10-25');
     freshMemory={...memory,children:[{...child,version:'child-v2'}]};
-    await timers.find(t=>t.ms===15000).fn();assert.equal($('#reload-detail').hidden,false,'Child change prompts parent refresh without overwriting facts');
+    await timers.find(t=>t.ms===15000).fn();assert.equal(polls,1,'Detail timer delegates to the guarded entrypoint poll');
     $('#task-dialog').close();click('#reports');await wait(()=>$('#snapshot-report-form')&&!busy);
     assert.equal($('#snapshot-report-form img'),null);assert.equal($('#include-report-children').checked,true);assert.equal($('#snapshot-report-form input[name=taskIds]:checked'),null,'Nothing selected before user choice');
     submit('#snapshot-report-form');assert.match($('#editor-message').textContent,/Выбери от 1/);
