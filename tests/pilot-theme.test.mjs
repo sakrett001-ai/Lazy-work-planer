@@ -61,3 +61,26 @@ test('Recovered inner-light surfaces retain readable text and noninteractive glo
  assert.match(css,/#board \.overdue\{[^}]*text-decoration:underline/);
  assert.match(css,/#board\.kanban-archive\{grid-template-columns:1fr\}/);
 });
+
+test('Actual workspace presents Pulse team copy without legacy branding and preserves access/demo guidance',async()=>{
+ const response=await handleDashboardRequest(new Request('https://theme.test/assistant/workspace'));
+ assert.equal(response.status,200);
+ const page=await response.text();
+ assert.equal(page,html);
+ assert.doesNotMatch(page,/Lazy Work Planer|Личный ассистент|Меньше держать/i);
+ const dom=new JSDOM(page);const d=dom.window.document;
+ assert.equal(d.title,'Пульс · Поручения команды');
+ assert.match(d.querySelector('.brand').textContent,/Пульс/);
+ assert.equal(d.querySelector('.brand-mark').getAttribute('aria-hidden'),'true');
+ assert.equal(d.querySelector('#login-title').textContent,'Поручения, сроки, результат.');
+ assert.equal(d.querySelector('#page-title').textContent,'Поручения команды');
+ assert.equal(d.querySelector('#login-panel > p').textContent,'Войдите, чтобы работать с поручениями, сообщать о ходе выполнения и фиксировать результаты.');
+ assert.equal(d.querySelector('#login-panel').getAttribute('aria-labelledby'),'login-title');
+ assert.equal(d.querySelector('label[for="login-code"]').textContent,'Персональный код входа');
+ assert.equal(d.querySelector('#login-code').type,'password');
+ assert.match(d.querySelector('#login-panel .hint').textContent,/Одноразовый код.*30 минут.*8 часов/);
+ assert.match(d.querySelector('#example-banner').textContent,/вымышленные примеры/);
+ for(const id of ['login-panel','workspace','identity'])assert.equal(d.getElementById(id).hidden,true);
+ assert.equal(d.querySelector('#reports').hidden,true);
+ dom.window.close();
+});
