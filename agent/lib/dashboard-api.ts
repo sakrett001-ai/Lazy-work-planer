@@ -20,9 +20,12 @@ const assets: Record<string, [string, string]> = {
   '/assistant/pilot.html': ['pilot.html', 'text/html; charset=utf-8'],
   '/assistant/pilot.js': ['pilot.js', 'text/javascript; charset=utf-8'],
   '/assistant/pilot.css': ['pilot.css', 'text/css; charset=utf-8'],
+  '/assistant/pulse-mark.svg': ['pulse-mark.svg', 'image/svg+xml; charset=utf-8'],
   '/assistant/icons.js': ['icons.js', 'text/javascript; charset=utf-8'],
   '/assistant/prototype.css': ['prototype.css', 'text/css; charset=utf-8'],
   '/assistant/pilot-theme.css': ['pilot-theme.css', 'text/css; charset=utf-8'],
+  '/assistant/pulse-signal.js': ['pulse-signal.js', 'text/javascript; charset=utf-8'],
+  '/assistant/pulse-motion.js': ['pulse-motion.js', 'text/javascript; charset=utf-8'],
   '/assistant/prototype-ui.js': ['prototype-ui.js', 'text/javascript; charset=utf-8'],
 };
 export const taskVersion = (task: unknown) => digest(JSON.stringify(task));

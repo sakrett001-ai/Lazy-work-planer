@@ -1,3 +1,4 @@
+import {createCardPulseController} from './pulse-motion.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 const labels = { planned:'Запланировано', active:'В работе', blocked:'Есть препятствие', review:'На проверке', done:'Принято' };
 const boardColumns = [['planned','Запланировано'],['active','В работе'],['blocked','Препятствие'],['review','На проверке']];
@@ -6,6 +7,47 @@ const fieldNames = { status:'Состояние', summary:'Что известн
 const shift = (day, n) => new Date(Date.parse(day+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone:'Europe/Moscow' }).format(new Date());
 
+// Derived presentation only: approved deadline, never creation/start or proposedDue.
+export function deadlineState(task, now = Date.now()) {
+  if (task.status === 'done') return { text:'Завершено', kind:'done' };
+  if (!task.due) return { text:'Без срока', kind:'none' };
+  const remaining = Date.parse(`${task.due}T${task.dueTime || '18:00'}:00+03:00`) - now;
+  if (!Number.isFinite(remaining)) return { text:'Без срока', kind:'none' };
+  const hours = Math.max(1, Math.ceil(Math.abs(remaining) / 3600000));
+  const span = hours >= 24 ? `${Math.ceil(hours / 24)} дн.` : `${hours} ч.`;
+  return { text:remaining === 0 ? 'Срок наступил' : remaining < 0 ? `Просрочено на ${span}` : remaining < 3600000 ? 'Срок меньше часа' : `Осталось ${span}`,
+    kind:remaining <= 0 ? 'overdue' : remaining < 86400000 ? 'soon' : 'normal' };
+}
+export function cardPulseProgress(task, now = Date.now()) {
+  if (!task.due || task.status === 'review' || task.status === 'done') return 0;
+  const remaining = Date.parse(`${task.due}T${task.dueTime || '18:00'}:00+03:00`) - now;
+  return Number.isFinite(remaining) ? Math.max(0, Math.min(1, 1 - remaining / 86400000)) : 0;
+}
+export function cardPulseState(task, now = Date.now()) {
+  const due = deadlineState(task, now);
+  if (task.status === 'done') return { mode:'done', tone:'accepted' };
+  if (task.status === 'review') return { mode:'review', tone:'review' };
+  const urgency = due.kind === 'overdue' ? 'overdue' : due.kind === 'soon' ? 'soon' : null;
+  if (task.status === 'blocked' || task.blocker?.trim()) return { mode:'blocked', tone:urgency || 'blocked' };
+  if (urgency) return { mode:urgency, tone:urgency };
+  return task.status === 'active' ? { mode:'active', tone:'active' } : { mode:'planned', tone:'planned' };
+}
+// Exact approved demo waveforms; only presentation, never a medical measurement.
+const pulsePaths = {
+  "planned": "M0 26H65 C80 26 85 23 95 23 S115 29 125 29 S145 26 160 26 H300",
+  "active": "M0 26H15 C23 26 23 20 28 20 S35 32 40 32 S48 8 54 8 S61 43 68 43 S77 18 84 18 S93 26 102 26 H127 C135 26 135 20 140 20 S147 32 152 32 S160 8 166 8 S173 43 180 43 S189 18 196 18 S205 26 214 26 H239 C247 26 247 20 252 20 S259 32 264 32 S272 8 278 8 S285 26 292 26 H300",
+  "soon": "M0 26H7 C12 26 12 20 17 20 S23 33 28 33 S35 8 40 8 S47 43 52 43 S59 19 64 19 S71 26 78 26 H83 C88 26 88 20 93 20 S99 33 104 33 S111 8 116 8 S123 43 128 43 S135 19 140 19 S147 26 154 26 H159 C164 26 164 20 169 20 S175 33 180 33 S187 8 192 8 S199 43 204 43 S211 19 216 19 S223 26 230 26 H235 C240 26 240 20 245 20 S251 33 256 33 S263 8 268 8 S275 43 280 43 S287 26 294 26 H300",
+  "overdue": "M0 26H5 C9 26 9 31 13 31 S20 6 25 6 S31 45 36 45 S42 19 47 19 S53 26 58 26 H63 C67 26 67 31 71 31 S78 6 83 6 S89 45 94 45 S100 19 105 19 S111 26 116 26 H121 C125 26 125 31 129 31 S136 6 141 6 S147 45 152 45 S158 19 163 19 S169 26 174 26 H179 C183 26 183 31 187 31 S194 6 199 6 S205 45 210 45 S216 19 221 19 S227 26 232 26 H237 C241 26 241 31 245 31 S252 6 257 6 S263 45 268 45 S274 19 279 19 S285 26 290 26 H300",
+  "blocked": "M0 26H55 C64 26 66 24 71 24 S79 29 84 29 S92 22 97 22 S105 29 110 29 S119 26 128 26 H205 C214 26 216 24 221 24 S229 29 234 29 S242 22 247 22 S255 29 260 29 S269 26 278 26 H300",
+  "review": "M0 26H300",
+  "done": "M0 26H300"
+};
+export function cardPulsePath(mode) { return pulsePaths[mode] || pulsePaths.planned; }
+function pulseMarkup(mode) {
+  const path = cardPulsePath(mode);
+  return `<div class="card-pulse" aria-hidden="true"><canvas aria-hidden="true"></canvas><svg viewBox="0 0 300 52" preserveAspectRatio="none" focusable="false" aria-hidden="true"><path class="pulse-track" pathLength="740" d="${path}"/><path class="pulse-wave" pathLength="740" d="${path}"/></svg></div>`;
+}
+
 export function installPrototype(ctx) {
   const $ = s => document.querySelector(s);
   let view='board', month=today().slice(0,7)+'-01', lastInteraction=Date.now(), auto=false, draft=null, editingTask=null, editingPhase=null, jobsFor=null, lastSignal='', llmSettings=null;
@@ -13,34 +55,55 @@ export function installPrototype(ctx) {
   let creatingChild=null, reportEpoch=0, displayedReport=null;
   const jobViews=new WeakMap();
   const state=()=>ctx.get();
+  const pulseController=createCardPulseController($('#board'));
   const manager=()=>state().identity?.role==='manager';
   const selectedTask=()=>state().memory?.task || state().snapshot?.tasks.find(t=>t.id===state().selected);
   const modalOpen=()=>Boolean(document.querySelector('dialog[open]'));
   const message=(selector,text,success=false)=>ctx.note(selector,text,success);
   const inputValue=(form,name)=>form.elements.namedItem(name)?.value || '';
-  function interval(task) {
-    if (!task.due) return { text:'Без срока', kind:'none' };
-    const time=Date.parse(`${task.due}T${task.dueTime||'18:00'}:00+03:00`)-Date.now();
-    if (task.status==='done') return {text:'Завершено',kind:'done'};
-    const hours=Math.ceil(Math.abs(time)/3600000), span=hours>=24?`${Math.ceil(hours/24)} дн.`:`${hours} ч.`;
-    return {text:time<0?`Просрочено на ${span}`:time<3600000?'Срок меньше часа':`Осталось ${span}`,kind:time<0?'overdue':time<86400000?'soon':'normal'};
-  }
+  const interval = task => deadlineState(task);
   function important(task) { return task.needsDecision || task.needsClarification || task.status==='blocked' || ['no_reply','awaiting'].includes(task.contact) || ['overdue','soon'].includes(interval(task).kind); }
   function person(id) { return state().snapshot?.employees.find(p=>p.id===id)?.name || 'Участник'; }
   function smallButton(action,label,attrs='') { return `<button type="button" class="secondary" ${action} ${attrs}>${label}</button>`; }
   function card(task) {
     const {snapshot}=state(), status=Object.hasOwn(labels,task.status)?task.status:'planned';
     const pin=snapshot.preferences.pins.includes(task.id), signal=important(task)&&snapshot.preferences.seen[task.id]!==task.version;
-    const due=interval(task);
-    return `<article data-card-id="${esc(task.id)}" class="task ${status} ${pin?'pinned':''} ${signal?'has-signal':''}">
+    const due=interval(task), pulse=cardPulseState(task);
+    return `<article data-card-id="${esc(task.id)}" data-pulse="${pulse.mode}" data-pulse-tone="${pulse.tone}" data-pulse-progress="${cardPulseProgress(task)}" class="task ${status} ${pin?'pinned':''} ${signal?'has-signal':''}">
       <div class="task-top"><span>${esc(task.id)}</span><button type="button" class="pin-button ${pin?'is-pinned':''}" data-pin="${esc(task.id)}" aria-pressed="${pin}" aria-label="${pin?'Открепить':'Закрепить'} ${esc(task.title)}" title="${pin?'Открепить':'Закрепить'}">⌖</button></div>
       <button class="card-open" data-task="${esc(task.id)}"><span class="status">${labels[status]}</span><h2>${esc(task.title)}</h2><p class="summary">${esc(task.summary||task.description||'Ожидаем первое обновление.')}</p>
       <div class="task-meta">${esc(person(task.employeeId))}${task.project?' · '+esc(task.project):''}${task.protocol?`<div>Протокол ${esc(task.protocol.number||'без номера')}${task.protocol.point?' · п. '+esc(task.protocol.point):''}${task.protocol.date?' · '+ctx.date(task.protocol.date):''}</div>`:''}</div>
       <div class="card-deadline">${task.due?`<span>Срок</span><time datetime="${esc(task.due)}T${esc(task.dueTime||'18:00')}:00+03:00">${esc(ctx.date(task.due))} · ${esc(task.dueTime||'18:00')} мск</time>`:'<span>Срок не задан</span>'}</div>
-      <div class="task-bottom"><span class="${due.kind}">${esc(due.text)}</span><span aria-hidden="true">↗</span></div></button>
+      <div class="task-bottom"><span data-deadline-state class="${due.kind}">${esc(due.text)}</span><svg class="card-open-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true" focusable="false"><path d="M2 10 10 2M3 2h7v7"/></svg></div></button>
       ${signal?`<button class="notice-button" data-notice="${esc(task.id)}">${task.proposedDue?'Запрошен перенос':task.status==='blocked'?'Нужна помощь':task.contact==='awaiting'?'Запрошен статус':'Есть событие'} · заметил ✓</button>`:''}
+      ${pulseMarkup(pulse.mode)}
     </article>`;
   }
+  // Update only presentation nodes: do not rebuild cards, inputs, focus, or filters.
+  function refreshCardTime() {
+    if (document.hidden || !state().snapshot) return;
+    const tasks = new Map(state().snapshot.tasks.map(task => [task.id, task]));
+    const now = Date.now();
+    document.querySelectorAll('[data-card-id]').forEach(node => {
+      const task = tasks.get(node.dataset.cardId);
+      if (!task) return;
+      const pulse = cardPulseState(task, now), due = deadlineState(task, now);
+      node.dataset.pulse = pulse.mode;
+      node.dataset.pulseTone = pulse.tone;
+      node.dataset.pulseProgress = String(cardPulseProgress(task, now));
+      const path = cardPulsePath(pulse.mode);
+      node.querySelectorAll('.card-pulse path').forEach(trace => { if (trace.getAttribute('d') !== path) trace.setAttribute('d', path); });
+      const label = node.querySelector('[data-deadline-state]');
+      if (label) { label.textContent = due.text; label.className = due.kind; }
+    });
+    pulseController.refresh();
+  }
+  function syncVisibility() {
+    document.body.classList.toggle('page-hidden', document.hidden);
+    if (!document.hidden) refreshCardTime();
+  }
+  document.addEventListener('visibilitychange', syncVisibility);
+  syncVisibility();
   function calendar(tasks) {
     const first=new Date(month+'T12:00:00Z'), offset=(first.getUTCDay()+6)%7, start=shift(month,-offset);
     const days=Array.from({length:42},(_,i)=>shift(start,i));
@@ -103,7 +166,10 @@ export function installPrototype(ctx) {
   async function mutate(path,input,{dialog,taskId,after}={}) {
     if(ctx.busy())return; ctx.setBusy(true);
     const messageTarget=dialog?'#editor-message':$('#task-dialog').open?'#detail-message':'#workspace-message';
-    message(messageTarget,'');
+    const taskForm=dialog&&['task-create','task-edit'].includes(path)?$('#task-editor'):null;
+    if(taskForm)taskForm.setAttribute('aria-busy','true');
+    message(messageTarget,taskForm?'Сохраняем…':'');
+    if(taskForm)$(messageTarget).classList.add('pending');
     const key=JSON.stringify({path,input}); if(!pending.has(key))pending.set(key,crypto.randomUUID());
     let saved=false;
     try {
@@ -116,7 +182,10 @@ export function installPrototype(ctx) {
       else message('#workspace-message','Сохранено.',true);
       return result;
     } catch(error) { message(saved?'#workspace-message':messageTarget,saved?'Изменение сохранено. Обнови данные, когда связь восстановится.':error.message,saved); }
-    finally {ctx.setBusy(false);}
+    finally {
+      if(taskForm){taskForm.removeAttribute('aria-busy');$(messageTarget).classList.remove('pending');if($(messageTarget).textContent==='Сохраняем…')message(messageTarget,'');}
+      ctx.setBusy(false);
+    }
   }
   function openEditor(title,markup) {
     $('#editor-title').textContent=title;$('#editor-content').innerHTML=markup;message('#editor-message','');if(!$('#editor-dialog').open)$('#editor-dialog').showModal();
@@ -312,7 +381,7 @@ export function installPrototype(ctx) {
   $('#next-month').addEventListener('click',()=>{const d=new Date(month+'T12:00:00Z');d.setUTCMonth(d.getUTCMonth()+1);month=d.toISOString().slice(0,10);ctx.renderBoard();});
   $('#today-month').addEventListener('click',()=>{month=today().slice(0,7)+'-01';ctx.renderBoard();});
   $('#murmuration').addEventListener('change',event=>{auto=event.target.checked;lastInteraction=Date.now();$('#motion-note').textContent=auto?'Смена видов каждые 30 секунд; пауза при взаимодействии.':'Ты управляешь доской.';});
-  $('#pulse').addEventListener('change',event=>document.body.classList.toggle('quiet-motion',!event.target.checked));
+  $('#pulse').addEventListener('change',event=>{document.body.classList.toggle('quiet-motion',!event.target.checked);pulseController.sync();});
   $('#new-task').addEventListener('click',()=>taskEditor());$('#team').addEventListener('click',teamEditor);$('#llm-settings').addEventListener('click',modelsEditor);$('#reports').addEventListener('click',reportsEditor);
   $('#close-editor').addEventListener('click',()=>{if(!ctx.busy())$('#editor-dialog').close();});
   $('#editor-dialog').addEventListener('cancel',event=>{if(ctx.busy())event.preventDefault();});
@@ -327,7 +396,10 @@ export function installPrototype(ctx) {
     const role=event.target.dataset.llmConnection;if(!role||!llmSettings)return;
     const model=event.target.form.elements.namedItem(role+'-model');model.innerHTML=modelOptions(event.target.value,null);
   });
-  $('#editor-dialog').addEventListener('input',event=>{if(event.target.form?.id==='connection-editor')event.target.form.dataset.requestId=crypto.randomUUID();});
+  $('#editor-dialog').addEventListener('input',event=>{
+    if(event.target.form?.id==='task-editor'&&event.target.name==='title')event.target.setCustomValidity('');
+    if(event.target.form?.id==='connection-editor')event.target.form.dataset.requestId=crypto.randomUUID();
+  });
   $('#board').addEventListener('click',event=>{const pin=event.target.closest('[data-pin]'),notice=event.target.closest('[data-notice]');if(!pin&&!notice)return;
     const id=(pin||notice).dataset[pin?'pin':'notice'],task=state().snapshot.tasks.find(t=>t.id===id);if(!task)return;
     mutate(pin?'pin':'notice',pin?{taskId:id,pinned:!state().snapshot.preferences.pins.includes(id)}:{taskId:id,expectedVersion:task.version});
@@ -355,7 +427,12 @@ export function installPrototype(ctx) {
   $('#editor-dialog').addEventListener('submit',event=>{
     event.preventDefault();const form=event.target,dialog='#editor-dialog';
     if(form.id==='snapshot-report-form'){saveReportForm(form);return;}
-    if(form.id==='task-editor'){const fields=Object.fromEntries(['title','description','employeeId','project','due','dueTime','protocolNumber','protocolPoint','protocolDate'].map(k=>[k,inputValue(form,k)]));mutate(editingTask?'task-edit':'task-create',{fields,...(editingTask?{taskId:editingTask.id,expectedVersion:editingTask.version}:creatingChild||{})},{dialog});}
+    if(form.id==='task-editor'){
+      if(ctx.busy())return;
+      const title=form.elements.namedItem('title');
+      title.setCustomValidity(title.value.trim()?'':'Напиши, что нужно сделать — не только пробелы.');
+      if(!title.reportValidity()){title.focus();return;}
+      const fields=Object.fromEntries(['title','description','employeeId','project','due','dueTime','protocolNumber','protocolPoint','protocolDate'].map(k=>[k,inputValue(form,k)]));mutate(editingTask?'task-edit':'task-create',{fields,...(editingTask?{taskId:editingTask.id,expectedVersion:editingTask.version}:creatingChild||{})},{dialog});}
     if(form.id==='phase-editor')mutate('phase-save',{taskId:editingPhase.taskId,expectedVersion:editingPhase.version,phaseId:editingPhase.id,phase:{title:inputValue(form,'title'),start:inputValue(form,'start'),end:inputValue(form,'end'),dependsOn:inputValue(form,'dependsOn')||null}},{dialog});
     if(form.id==='draft-editor')mutate('draft-save',{draftId:draft.id,expectedVersion:draft.version,expectedTaskVersion:draft.taskVersion,title:inputValue(form,'title'),body:inputValue(form,'body'),status:inputValue(form,'status')},{dialog});
     if(form.id==='automation-form')mutate('automation',{enabled:form.elements.enabled.checked},{dialog});
@@ -378,7 +455,7 @@ export function installPrototype(ctx) {
   });
   const rotation=setInterval(()=>{if(auto&&state().identity&&canRefresh()){view=({board:'calendar',calendar:'gantt',gantt:'board'})[view];ctx.renderBoard();}},30000);
   const jobsTimer=setInterval(()=>{if(jobsFor&&state().identity&&!document.hidden&&$('#task-dialog').open&&!ctx.busy())loadJobs();},6000);
-  const detailTimer=setInterval(checkDetail,15000);
-  window.addEventListener('pagehide',()=>{clearInterval(rotation);clearInterval(jobsTimer);clearInterval(detailTimer);const field=$('#connection-editor input[name="apiKey"]');if(field){field.value='';field.form.dataset.requestId=crypto.randomUUID();}});
+  const detailTimer=setInterval(()=>{refreshCardTime();checkDetail();},15000);
+  window.addEventListener('pagehide',()=>{pulseController.destroy();document.removeEventListener('visibilitychange',syncVisibility);clearInterval(rotation);clearInterval(jobsTimer);clearInterval(detailTimer);const field=$('#connection-editor input[name="apiKey"]');if(field){field.value='';field.form.dataset.requestId=crypto.randomUUID();}});
   return {renderBoard,detailMarkup,detailMounted:loadJobs,canRefresh,isImportant:important,reset(){pending.clear();jobsFor=null;auto=false;view='board';lastSignal='';$('#murmuration').checked=false;if($('#editor-dialog').open)$('#editor-dialog').close();$('#brief-text').textContent='';}};
 }

@@ -18,6 +18,8 @@ const { issueInvite } = await import('../agent/lib/web-auth.ts');
 const { handleDashboardRequest } = await import('../agent/lib/dashboard-api.ts');
 const html = readFileSync(new URL('../dist/pilot.html', import.meta.url), 'utf8');
 const extension = readFileSync(new URL('../dist/prototype-ui.js', import.meta.url), 'utf8');
+const pulseSignal = readFileSync(new URL('../dist/pulse-signal.js', import.meta.url), 'utf8');
+const pulseMotion = readFileSync(new URL('../dist/pulse-motion.js', import.meta.url), 'utf8');
 const entry = readFileSync(new URL('../dist/pilot.js', import.meta.url), 'utf8');
 
 async function wait(check, label) {
@@ -55,7 +57,7 @@ function tab() {
   };
   // Only the ESM import/export boundary is replaced; source bodies run unchanged
   // in their own window realm. No production result, state, or handler is mocked.
-  w.eval(`window.installPrototype = (() => { ${extension.replace('export function installPrototype', 'function installPrototype')}\nreturn installPrototype; })();`);
+  w.eval(`window.installPrototype = (() => { ${[pulseSignal,pulseMotion,extension].map(source=>source.replace(/^import .*;$/gm,'').replace(/export /g,'')).join('\n')}\nreturn installPrototype; })();`);
   w.eval(entry.replace("import { installPrototype } from './prototype-ui.js';", 'const installPrototype = window.installPrototype;'));
   const $ = selector => d.querySelector(selector);
   const click = selector => { assert.ok($(selector), selector); assert.equal($(selector).disabled, false, selector); $(selector).click(); };

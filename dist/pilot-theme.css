@@ -90,7 +90,7 @@ body{background-image:radial-gradient(ellipse at 88% 0,#5635a54d,transparent 48%
 /* Login, task details, report snapshots and editors share the same tokens.
    Dialogs are siblings of workspace, so these rules do not depend on its state. */
 .topbar{background:#080d1be6;border-bottom-color:var(--line)}
-.brand-mark{color:var(--cyan);text-shadow:0 0 18px #55e6ff35}
+.brand-mark{display:block;width:48px;height:48px;flex:none;object-fit:contain}
 .eyebrow{color:var(--cyan)}
 .login-panel,dialog{background:radial-gradient(ellipse at 0 0,#55e6ff10,transparent 65%),radial-gradient(ellipse at 100% 100%,#a36aff12,transparent 60%),linear-gradient(145deg,#17233a,#101a2d);border-color:#6689ad;box-shadow:inset 0 1px #b9f7ff70,inset 0 -1px #c49aff50,0 24px 70px #00000060}
 .login-panel h1{font-weight:650;letter-spacing:-1.2px}
