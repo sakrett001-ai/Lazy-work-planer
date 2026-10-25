@@ -1,0 +1,9 @@
+# Explicit hosted overlay; local prototype defaults remain unchanged.
+# docker compose -f compose.prototype.yaml -f compose.hosted.yaml ...
+services:
+  assistant:
+    command: ["node", "scripts/pilot-server.mjs"]
+    environment:
+      ASSISTANT_SERVER_ORIGIN: ${ASSISTANT_SERVER_ORIGIN:?Set the public HTTPS origin}
+      ASSISTANT_AI_ENABLED: "false"
+      ASSISTANT_DELIVERY_ENABLED: "false"

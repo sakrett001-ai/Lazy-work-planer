@@ -45,6 +45,7 @@ test('Рабочий прототип в DOM: постановка с потер
     assert.equal($('[data-column="active"] [data-task]').dataset.task,taskId);
     assert.equal($('[data-column="planned"] .kanban-count').textContent,'0');
     click('#close-dialog');click('[data-pin]');await wait(()=>$('.pin-button.is-pinned')&&!$('#logout').disabled);assert.equal($('#task-dialog').open,false);
+    const pulseBeforeAck=$('[data-card-id]').dataset.pulse;click('[data-notice]');await wait(()=>!$('[data-notice]')&&!$('#logout').disabled);assert.equal($('[data-card-id]').dataset.pulse,pulseBeforeAck,'Заметил не гасит состояние задачи');
     click('[data-view="calendar"]');assert.ok($('.calendar-grid'));assert.ok($('.calendar-task')?.textContent.includes('тестовую сводку'));
     click('[data-view="board"]');click('[data-task]');await wait(()=>$('[data-new-phase]'));
     click('[data-new-phase]');form=$('#phase-editor');form.elements.title.value='Подготовить исходные данные';form.elements.start.value=day;form.elements.end.value=later;submit('#phase-editor');
@@ -53,7 +54,7 @@ test('Рабочий прототип в DOM: постановка с потер
     click('[data-view="board"]');click('[data-task]');await wait(()=>$('#message-form'));
     const longMessage='Уточни готовый результат и необходимые данные. '+'Дополнительное пояснение. '.repeat(90)+'В конце: <img src=x onerror=alert(1)> Исходные данные НЕ получены.';
     $('#manager-message').value=longMessage;$('#message-form').elements.requestUpdate.checked=true;submit('#message-form');
-    await wait(()=>$('.bubble')?.textContent.includes('Уточни готовый результат')&&!$('#logout').disabled);
+    await wait(()=>$('.bubble')?.textContent.includes('Уточни готовый результат')&&!$('#logout').disabled);assert.ok($('[data-notice]'),'Новая версия возвращает уведомление');
     click('#preview-context');await wait(()=>$('#context-preview-content .context-source'));
     click('#context-preview-content [data-source-open]');await wait(()=>$('#context-preview-content .source-page'));
     click('#context-preview-content [data-source-open]');await wait(()=>!$('#context-preview-content [data-source-open]'));
@@ -77,13 +78,13 @@ test('Рабочий прототип в DOM: постановка с потер
     click('[data-phase-toggle]');await wait(()=>$('#task-content progress')?.value===1&&!$('#logout').disabled);
     $('#report-text').value='Работа выполнена, результат готов к проверке.';submit('#report-form');await wait(()=>store.readState().tasks[0].status==='review'&&!$('#logout').disabled);
     await logout();await login('boss');
-    assert.equal($('[data-column="review"] [data-task]').dataset.task,taskId);
+    assert.equal($('[data-column="review"] [data-task]').dataset.task,taskId);assert.equal($('[data-card-id]').dataset.pulse,'review');
     assert.ok($('#brief-text').textContent.includes('Проверить и принять результат'));
     click('[data-task]');await wait(()=>$('[data-decision="accept"]'));
     click('[data-decision="accept"]');await wait(()=>store.readState().tasks[0].status==='done'&&!$('#logout').disabled);
     click('#close-dialog');assert.equal($('[data-task]'),null);click('[data-filter="done"]');assert.equal($('[data-task]').dataset.task,taskId);
     assert.equal(d.querySelectorAll('[data-column]').length,1);
-    assert.equal($('[data-column="done"] [data-task]').dataset.task,taskId);
+    assert.equal($('[data-column="done"] [data-task]').dataset.task,taskId);assert.equal($('[data-card-id]').dataset.pulse,'done');
     click('[data-task]');await wait(()=>$('[data-task-action="reopen"]'));click('[data-task-action="reopen"]');await wait(()=>store.readState().tasks[0].status==='active'&&!$('#logout').disabled);
     assert.equal(w.localStorage.length,0);assert.deepEqual(errors,[]);
   }finally{timers.forEach(clearInterval);Object.assign(globalThis,previous);w.close();store.database().close();rmSync(dir,{recursive:true,force:true});}

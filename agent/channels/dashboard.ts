@@ -14,7 +14,7 @@ export default defineChannel({
   audience() { return 'private'; },
   turnPolicy: 'queue',
   routes: [
-    ...['/assistant/workspace', '/assistant/pilot.html', '/assistant/pilot.js', '/assistant/prototype-ui.js', '/assistant/pilot.css', '/assistant/prototype.css', '/assistant/icons.js', '/assistant/api/session', '/assistant/api/tasks', '/assistant/api/memory', '/assistant/api/context', '/assistant/api/source', '/assistant/api/assistant', '/assistant/api/llm-settings', '/assistant/api/reports'].map(path => GET(path, serve)),
+    ...['/assistant/workspace', '/assistant/pilot.html', '/assistant/pilot.js', '/assistant/prototype-ui.js', '/assistant/pulse-signal.js', '/assistant/pulse-motion.js', '/assistant/pilot.css', '/assistant/prototype.css', '/assistant/pilot-theme.css', '/assistant/icons.js', '/assistant/pulse-mark.svg', '/assistant/api/session', '/assistant/api/tasks', '/assistant/api/memory', '/assistant/api/context', '/assistant/api/source', '/assistant/api/assistant', '/assistant/api/llm-settings', '/assistant/api/reports'].map(path => GET(path, serve)),
     ...['login', 'logout', 'report-create', 'report', 'decision', 'invite', 'llm-settings', 'llm-connection', ...prototypePaths].map(path => POST(`/assistant/api/${path}`, serve)),
     POST('/assistant/api/assistant', async request => {
       const response = await serve(request);

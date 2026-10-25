@@ -4,22 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Рабочее пространство · Личный ассистент</title>
+  <link rel="icon" href="./pulse-mark.svg" type="image/svg+xml">
+  <title>Пульс · Поручения команды</title>
   <link rel="stylesheet" href="./pilot.css">
   <link rel="stylesheet" href="./prototype.css">
+  <link rel="stylesheet" href="./pilot-theme.css">
 </head>
 <body>
-  <header class="topbar"><a class="brand" href="./workspace"><span class="brand-mark">а·</span><span>Личный ассистент<small>Рабочее пространство</small></span></a><div id="identity" hidden><span id="person"></span><button id="logout" class="quiet">Выйти</button></div></header>
+  <header class="topbar"><a class="brand" href="./workspace"><img class="brand-mark" src="./pulse-mark.svg" alt="" aria-hidden="true" width="48" height="48"><span>Пульс<small>Рабочее пространство</small></span></a><div id="identity" hidden><span id="person"></span><button id="logout" class="quiet">Выйти</button></div></header>
   <main>
     <section id="login-panel" class="login-panel" hidden aria-labelledby="login-title">
-      <span class="eyebrow">Lazy Work Planer · Прототип</span><h1 id="login-title">Меньше держать<br>в голове.</h1>
-      <p>Войди, чтобы видеть свои задачи, сообщать о продвижении и сохранять договорённости.</p>
+      <span class="eyebrow">Пульс · Командный пилот</span><h1 id="login-title">Поручения, сроки, <br>результат.</h1>
+      <p>Войдите, чтобы работать с поручениями, сообщать о ходе выполнения и фиксировать результаты.</p>
       <form id="login-form"><label for="login-code">Персональный код входа</label><input id="login-code" name="code" type="password" required autocomplete="off" spellcheck="false" maxlength="80"><button class="primary" type="submit">Открыть пространство <span aria-hidden="true">↗</span></button></form>
       <p class="hint">Одноразовый код выдаёт организатор пилота. Он действует 30 минут; после входа сеанс открыт 8 часов.</p>
       <p id="login-message" class="message" role="status" aria-live="polite"></p>
     </section>
     <section id="workspace" hidden aria-labelledby="page-title">
-      <div class="heading"><div><span class="eyebrow">Задачи · Источники · Решения</span><h1 id="page-title">Всё, что требует внимания.</h1><p id="greeting"></p></div><div class="heading-actions"><button id="llm-settings" class="quiet" hidden>Модели и роли ✦</button><button id="team" class="quiet" hidden>Участники</button><button id="reports" class="quiet" hidden>Отчёты</button><button id="refresh" class="secondary">Обновить ↻</button><button id="new-task" class="primary" hidden>+ Поручение</button></div></div>
+      <div class="heading"><div><span class="eyebrow">Поручения · Статусы · Отчёты</span><h1 id="page-title">Поручения команды</h1><p id="greeting"></p></div><div class="heading-actions"><button id="llm-settings" class="quiet" hidden>Модели и роли ✦</button><button id="team" class="quiet" hidden>Участники</button><button id="reports" class="quiet" hidden>Отчёты</button><button id="refresh" class="secondary">Обновить ↻</button><button id="new-task" class="primary" hidden>+ Поручение</button></div></div>
       <p id="example-banner" class="example-banner" hidden>Стартовые поручения — вымышленные примеры. Добавляй свои задачи и участников для проверки рабочего цикла.</p>
       <div id="metrics" class="metrics"></div>
       <details class="brief-panel"><summary><span>✦ Короткая сводка</span><span id="mode-label"></span></summary><p id="brief-text"></p></details>
@@ -30,7 +32,7 @@
       <div id="month-tools" class="month-tools" hidden><button id="prev-month" class="secondary" aria-label="Предыдущий месяц">←</button><span id="month-label"></span><button id="next-month" class="secondary" aria-label="Следующий месяц">→</button><button id="today-month" class="quiet">Текущий месяц</button></div>
       <p id="board-guide" class="board-guide"></p>
       <div id="board" class="board" aria-label="Доска поручений" tabindex="0"></div>
-      <footer><span id="freshness">Загружаем данные…</span><span>Общая память · Персональный доступ</span></footer>
+      <footer><span id="freshness">Загружаем данные…</span><span>История поручений · Персональный доступ</span></footer>
     </section>
     <p id="loading" class="initial-loading" role="status">Подключаем рабочее пространство…</p>
   </main>
