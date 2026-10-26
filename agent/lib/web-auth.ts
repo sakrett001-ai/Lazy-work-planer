@@ -36,11 +36,18 @@ export function requireOrigin(request: Request) {
 }
 
 export function issueInvite(employeeId: string, at = Date.now()) {
-  if (!readState().employees.some(p => p.id === employeeId)) throw new Error('Участник не зарегистрирован. Сначала импортируйте состав пилота.');
-  const value = token(), db = webTables();
-  db.prepare('DELETE FROM web_invites WHERE expires_at <= ? OR employee_id = ?').run(at, employeeId);
-  db.prepare('INSERT INTO web_invites VALUES (?,?,?)').run(digest(value), employeeId, at + 30 * 60 * 1000);
-  return value;
+  const db = webTables();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const person = readState().employees.find(p => p.id === employeeId);
+    if (!person) throw new WebError(404, 'Участник не зарегистрирован.');
+    if (person.enabled === false) throw new WebError(403, 'Доступ сотрудника отключён.');
+    const value = token();
+    db.prepare('DELETE FROM web_invites WHERE expires_at <= ? OR employee_id = ?').run(at, employeeId);
+    db.prepare('INSERT INTO web_invites VALUES (?,?,?)').run(digest(value), employeeId, at + 30 * 60 * 1000);
+    db.exec('COMMIT');
+    return value;
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
 export function login(code: string, at = Date.now()) {
@@ -48,7 +55,7 @@ export function login(code: string, at = Date.now()) {
   db.exec('BEGIN IMMEDIATE');
   try {
     const row = db.prepare('DELETE FROM web_invites WHERE hash = ? AND expires_at > ? RETURNING employee_id').get(digest(code), at) as { employee_id: string } | undefined;
-    if (!row || !readState().employees.some(p => p.id === row.employee_id)) throw new WebError(401, 'Код недействителен или уже использован.');
+    if (!row || !readState().employees.some(p => p.id === row.employee_id && p.enabled !== false)) throw new WebError(401, 'Код недействителен или уже использован.');
     const value = token(), csrf = token();
     db.prepare('DELETE FROM web_sessions WHERE expires_at <= ?').run(at);
     db.prepare('INSERT INTO web_sessions VALUES (?,?,?,?)').run(digest(value), row.employee_id, csrf, at + SESSION_SECONDS * 1000);
@@ -64,7 +71,7 @@ export function session(request: Request, at = Date.now()) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(value)) throw new WebError(401, 'Войдите в рабочее пространство.');
   const hash = digest(value);
   const row = webTables().prepare('SELECT employee_id, csrf FROM web_sessions WHERE hash = ? AND expires_at > ?').get(hash, at) as { employee_id: string; csrf: string } | undefined;
-  const actor = row && readState().employees.find(p => p.id === row.employee_id);
+  const actor = row && readState().employees.find(p => p.id === row.employee_id && p.enabled !== false);
   if (!row || !actor) throw new WebError(401, 'Сеанс завершён. Войдите снова.');
   return { actor, csrf: row.csrf, hash };
 }

@@ -14,11 +14,12 @@ test('Рабочий прототип в DOM: постановка с потер
   const dom=new JSDOM(readFileSync(new URL('../dist/pilot.html',import.meta.url),'utf8'),{url:origin+'/assistant/workspace',pretendToBeVisual:true,virtualConsole:console}),w=dom.window,d=w.document;
   w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
   const previous=Object.fromEntries(['window','document','fetch','setInterval'].map(k=>[k,globalThis[k]])),timers=[],requests=[],intervals=[];
-  let cookie='',lose=true;
+  let cookie='',lose=true,loseDisable=true;const disableRequests=[];
   Object.assign(globalThis,{window:w,document:d,setInterval(fn,ms){const t=previous.setInterval(fn,ms);t.unref();timers.push(t);intervals.push({fn,ms});return t;},async fetch(url,options={}){
     const h=new Headers(options.headers);if(cookie)h.set('cookie',cookie);if(options.method==='POST')h.set('origin',origin);
     const r=await handleDashboardRequest(new Request(url,{...options,headers:h}));if(r.headers.has('set-cookie'))cookie=r.headers.get('set-cookie').split(';')[0];
     if(new URL(url).pathname.endsWith('/task-create')){requests.push(JSON.parse(options.body));if(lose&&r.ok){lose=false;throw new Error('Lost response');}}
+    if(new URL(url).pathname.endsWith('/person-disable')){disableRequests.push(JSON.parse(options.body));if(loseDisable&&r.ok){loseDisable=false;throw new Error('Lost response');}}
     return r;
   }});
   const $=s=>d.querySelector(s),click=s=>{assert.ok($(s),s);$(s).click();},submit=s=>$(s).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
@@ -86,6 +87,20 @@ test('Рабочий прототип в DOM: постановка с потер
     assert.equal(d.querySelectorAll('[data-column]').length,1);
     assert.equal($('[data-column="done"] [data-task]').dataset.task,taskId);assert.equal($('[data-card-id]').dataset.pulse,'done');
     click('[data-task]');await wait(()=>$('[data-task-action="reopen"]'));click('[data-task-action="reopen"]');await wait(()=>store.readState().tasks[0].status==='active'&&!$('#logout').disabled);
+    click('#close-dialog');click('#team');
+    assert.equal($('[data-disable-person="boss"]'),null,'Руководителя нельзя отключить');
+    click('[data-disable-person="a"]');assert.match($('#editor-content').textContent,/Все его сеансы/);assert.match($('#editor-content').textContent,/история/);
+    click('#cancel-person-disable');assert.ok($('#team-list'));assert.equal(disableRequests.length,0);assert.notEqual(store.readState().employees.find(p=>p.id==='a').enabled,false);
+    click('[data-disable-person="a"]');click('#close-editor');assert.equal(disableRequests.length,0,'Закрытие подтверждения не отключает доступ');
+    click('#team');click('[data-disable-person="a"]');submit('#person-disable-form');submit('#person-disable-form');
+    await wait(()=>$('#editor-message').textContent.includes('связь прервалась')&&!$('#logout').disabled);
+    assert.equal(disableRequests.length,1,'Повторное нажатие во время запроса не отправляется');
+    assert.equal(store.readState().employees.find(p=>p.id==='a').enabled,false);
+    submit('#person-disable-form');await wait(()=>$('#team-list')?.textContent.includes('Доступ отключён')&&!$('#logout').disabled);
+    assert.equal(disableRequests.length,2);assert.equal(disableRequests[0].requestId,disableRequests[1].requestId,'После потери ответа повтор сохраняет ID операции');
+    assert.equal($('[data-invite="a"]'),null);assert.equal($('[data-disable-person="a"]'),null);assert.ok($('[data-invite="boss"]'));
+    assert.equal(store.readState().tasks[0].employeeId,'a');assert.ok(store.readState().sources.some(s=>s.employeeId==='a'),'Автор сообщения сохранён');
+    click('#close-editor');click('#new-task');assert.equal($('#task-editor option[value="a"]').disabled,true);click('#close-editor');
     assert.equal(w.localStorage.length,0);assert.deepEqual(errors,[]);
   }finally{timers.forEach(clearInterval);Object.assign(globalThis,previous);w.close();store.database().close();rmSync(dir,{recursive:true,force:true});}
 });

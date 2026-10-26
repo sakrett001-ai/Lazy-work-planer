@@ -49,17 +49,52 @@ def recv_all(sock):
  return data
 
 
+def observe_gate_io(gate):
+ # Fixture-only metadata; never retain frame bytes, argv, credentials or exception text.
+ events=[]
+ def wrap(name):
+  original=getattr(gate,name)
+  def observed(*args,**kwargs):
+   deadline=args[2] if name=='_recv' else args[1]
+   event={'phase':name,'state':'entered','remaining_before_ms':round((deadline-time.monotonic())*1000,3)}
+   events.append(event)
+   try:
+    result=original(*args,**kwargs);event['state']='returned';return result
+   except Exception as error:
+    event['state']='raised';event['error_type']=type(error).__name__;raise
+   finally:event['remaining_after_ms']=round((deadline-time.monotonic())*1000,3)
+  setattr(gate,name,observed)
+ for name in ['_recv','_pipe']:wrap(name)
+ return events
+
+
+def request_diagnostic(gate,attempt,size,elapsed,calls,busy_before,events):
+ return json.dumps({'attempt':attempt,'response_bytes':size,'elapsed_ms':round(elapsed*1000,3),
+  'gate_failed':gate.failed,'worker_alive':gate.worker_alive,
+  'worker_returncode':gate._worker.poll() if gate._worker is not None else None,
+  'worker_calls':calls,'busy_before':busy_before,'busy_after':gate._busy.locked(),
+  'frame_timeout_ms':gate.frame_timeout*1000,'worker_timeout_ms':gate.worker_timeout*1000,
+  'io_events':events},sort_keys=True)
+
+
 class GateChecks(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(prefix='peer-gate-');self.dir=Path(self.tmp.name);os.chmod(self.dir,0o700)
   self.socket=self.dir/'broker.sock';self.worker=self.dir/'fake_worker.py';self.worker.write_text(WORKER);self.marker=self.dir/'calls';self.gate=None
  def tearDown(self):
-  if self.gate:self.gate.close()
-  self.tmp.cleanup()
+  try:
+   if self.gate:
+    self.gate.close()
+    self.assertFalse(self.gate.worker_alive,'Fixture worker still alive after bounded close')
+    for thread in [self.gate._thread,self.gate._handler]:
+     self.assertFalse(thread is not None and thread.is_alive(),'Fixture thread still alive after bounded close')
+  finally:self.tmp.cleanup()
  def start(self,mode='echo',uid=None,**kw):
   self.gate=PeerGate(str(self.socket),os.getuid() if uid is None else uid,[sys.executable,str(self.worker),mode,str(self.marker)],frame_timeout=kw.get('frame_timeout',.25),worker_timeout=kw.get('worker_timeout',.5)).start();return self.gate
  def connection(self):
-  s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);s.settimeout(2);s.connect(str(self.socket));return s
+  s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+  try:s.settimeout(2);s.connect(str(self.socket));return s
+  except Exception:s.close();raise
  def request(self,body=b'{"value":"synthetic"}',raw=None):
   with self.connection() as s:
    try:s.sendall(raw if raw is not None else struct.pack('!I',len(body))+body);s.shutdown(socket.SHUT_WR)
@@ -67,9 +102,17 @@ class GateChecks(unittest.TestCase):
    return recv_all(s)
  def count(self):return len(self.marker.read_text().splitlines()) if self.marker.exists() else 0
  def test_kernel_peer_credentials_and_persistent_exact_framing(self):
-  g=self.start();pid=g.worker_pid
-  for _ in range(2):
-   r=self.request();n=struct.unpack('!I',r[:4])[0];self.assertEqual(n,len(r)-4);v=json.loads(r[4:]);self.assertEqual(v['echo'],{'value':'synthetic'});self.assertEqual(v['pid'],pid)
+  g=self.start();pid=g.worker_pid;events=observe_gate_io(g)
+  for attempt in range(1,3):
+   events.clear();started=time.monotonic();busy_before=g._busy.locked()
+   try:r=self.request()
+   except Exception as error:
+    self.fail(type(error).__name__+' '+request_diagnostic(g,attempt,None,time.monotonic()-started,self.count(),busy_before,events))
+   diagnostic=request_diagnostic(g,attempt,len(r),time.monotonic()-started,self.count(),busy_before,events)
+   print('\npersistent_request '+diagnostic,file=sys.stderr)
+   self.assertGreaterEqual(len(r),4,diagnostic)
+   n=struct.unpack('!I',r[:4])[0];self.assertEqual(n,len(r)-4,diagnostic)
+   v=json.loads(r[4:]);self.assertEqual(v['echo'],{'value':'synthetic'},diagnostic);self.assertEqual(v['pid'],pid,diagnostic)
   self.assertEqual(self.count(),2);self.assertFalse(g.failed);self.assertEqual(stat.S_IMODE(self.socket.stat().st_mode),0o600)
  def test_real_kernel_uid_mismatch_rejected_before_worker(self):
   self.start(uid=os.getuid()+1);self.assertEqual(self.request(),b'');self.assertEqual(self.count(),0)

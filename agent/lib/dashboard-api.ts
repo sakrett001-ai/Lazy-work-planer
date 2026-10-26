@@ -108,6 +108,7 @@ async function route(request: Request, options: DashboardOptions) {
     const input = reportSchema.parse(await readJson(request));
     let receipt: unknown;
     updateState(state => {
+      if (!state.employees.some(p => p.id === actor.id && p.enabled !== false)) throw new WebError(401, 'Сеанс завершён.');
       const task = state.tasks.find(t => t.id === input.taskId);
       if (!task || task.employeeId !== actor.id) throw new WebError(404, 'Задача не найдена или назначена другому сотруднику.');
       const at = new Date().toISOString(), id = `web:${actor.id}:${input.requestId}`;

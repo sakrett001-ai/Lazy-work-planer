@@ -162,6 +162,7 @@ export function addTask(state, input, now = new Date()) {
   if (input.protocolDate && !validDate(input.protocolDate)) throw new Error('Проверь дату протокола');
   const person = state.employees.find(p => p.id === input.employeeId);
   if (!person) throw new Error('Выбери исполнителя');
+  if (person.enabled === false) throw new Error('Доступ исполнителя отключён. Выбери другого сотрудника.');
   const next = clone(state), id = `З-${Math.max(300, ...state.tasks.map(t => Number(t.id.replace(/\D/g, '')) || 0)) + 1}`;
   const task = { id, title: input.title.trim().slice(0, 160), summary: (input.summary || '').trim().slice(0, 2000), employeeId: person.id, department: person.department, project: input.project?.trim() || 'Мои поручения', status: 'planned', contact: 'answered', start: dayKey(now), due: input.due || null, dueTime: input.dueTime || '18:00', needsDecision: false };
   if (input.protocolNumber || input.protocolPoint || input.protocolDate) task.protocol = { number: input.protocolNumber?.trim() || '', point: input.protocolPoint?.trim() || '', date: input.protocolDate || null };
@@ -185,7 +186,11 @@ export function editTask(state, id, input, now = new Date()) {
   const current = state.tasks.find(t => t.id === id);
   if (!current || current.status === 'done') throw new Error('Архивную задачу сначала нужно вернуть в работу');
   // Reuse the same field validation without creating a second task.
-  const { task: checked } = addTask(state, input, now);
+  // Preserve an existing disabled owner for unrelated edits; never allow a new assignment.
+  const validationState = input.employeeId === current.employeeId
+    ? { ...state, employees: state.employees.map(p => p.id === current.employeeId ? { ...p, enabled: true } : p) }
+    : state;
+  const { task: checked } = addTask(validationState, input, now);
   const next = clone(state), task = next.tasks.find(t => t.id === id);
   for (const key of ['title','summary','employeeId','department','project','due','dueTime']) task[key] = checked[key];
   task.protocol = checked.protocol || null;

@@ -33,6 +33,7 @@ const schemas = {
   'draft-save': z.object({ ...operation, draftId: id, expectedVersion: version, expectedTaskVersion: version, title: z.string().trim().min(1).max(200), body: z.string().trim().min(1).max(6000), status: z.enum(['draft', 'approved']) }).strict(),
   'pin': z.object({ ...operation, taskId: id, pinned: z.boolean() }).strict(),
   'notice': z.object({ ...operation, taskId: id, expectedVersion: version }).strict(),
+  'person-disable': z.object({ ...operation, employeeId: id }).strict(),
   'person-create': z.object({ ...operation, name: z.string().trim().min(1).max(120) }).strict(),
   'automation': z.object({ ...operation, enabled: z.boolean() }).strict(),
 };
@@ -67,7 +68,7 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
   tables();
   updateState(state => {
     const current = state.employees.find(p => p.id === actor.id);
-    if (!current) throw new WebError(401, 'Участник не найден.');
+    if (!current || current.enabled === false) throw new WebError(401, 'Участник не найден.');
     if (!['pin', 'notice', 'phase-toggle'].includes(path)) manager(current);
     const db = tables();
     const prior = db.prepare('SELECT request_hash,response FROM web_operations WHERE id=?').get(key) as {request_hash:string;response:string}|undefined;
@@ -149,6 +150,19 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
       } else if (path === 'person-create') {
         const person = { id: `employee-${randomUUID()}`, name: input.name, role: 'employee' as const };
         state.employees.push(person); receipt.employee = person;
+      } else if (path === 'person-disable') {
+        const person = state.employees.find(p => p.id === input.employeeId);
+        if (!person) throw new WebError(404, 'Участник не найден.');
+        if (person.role === 'manager' || person.id === current.id) throw new WebError(403, 'Доступ руководителя нельзя отключить.');
+        receipt.employeeId = person.id;
+        receipt.alreadyDisabled = person.enabled === false;
+        if (!receipt.alreadyDisabled) {
+          person.enabled = false;
+          state.events.unshift({ key, kind: 'employee_disabled', employeeId: person.id, actorId: current.id, at, text: `Руководитель отключил доступ сотрудника: ${person.name}.` });
+        }
+        // State, revocation and idempotency receipt commit or roll back together.
+        db.prepare('DELETE FROM web_sessions WHERE employee_id = ?').run(person.id);
+        db.prepare('DELETE FROM web_invites WHERE employee_id = ?').run(person.id);
       } else if (path === 'automation') {
         (state.settings as any).prototypeAutoCheckins = input.enabled;
       }
@@ -165,7 +179,9 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
 }
 
 export function inviteParticipant(raw: unknown, actor: Employee) {
-  manager(actor);
+  const current = readState().employees.find(p => p.id === actor.id && p.enabled !== false);
+  if (!current) throw new WebError(401, 'Сеанс завершён.');
+  manager(current);
   const { employeeId } = z.object({ employeeId: id }).strict().parse(raw);
   const person = readState().employees.find(p => p.id === employeeId);
   if (!person || (person.role === 'manager' && person.id !== actor.id)) throw new WebError(404, 'Участник не найден.');

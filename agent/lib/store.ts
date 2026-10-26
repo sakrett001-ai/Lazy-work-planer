@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-export type Employee={id:string;name:string;role?:'employee'|'manager';telegramId?:string;[key:string]:unknown};
+export type Employee={id:string;name:string;role?:'employee'|'manager';enabled?:boolean;telegramId?:string;[key:string]:unknown};
 export type Source={id:string;employeeId:string;taskId:string|null;text:string;receivedAt:string;occurredAt?:string;dispatched?:boolean};
 export type State={employees:Employee[];tasks:any[];sources:any[];events:any[];decisionDrafts?:any[];notifications?:any[];graphRuns?:any[];settings:{timezone:string;startHour:number;endHour:number;minHoursBetween:number;excludedDates:string[]}};
 const empty:State={employees:[],tasks:[],sources:[],events:[],settings:{timezone:'Europe/Moscow',startHour:9,endHour:18,minHoursBetween:6,excludedDates:[]}};
@@ -15,7 +15,7 @@ export function database(){
 }
 export function readState():State{return JSON.parse((database().prepare('SELECT data FROM state WHERE id=1').get() as {data:string}).data);}
 export function updateState(fn:(state:State)=>State):State{const db=database();db.exec('BEGIN IMMEDIATE');try{const next=fn(readState());db.prepare('UPDATE state SET data=? WHERE id=1').run(JSON.stringify(next));db.exec('COMMIT');return next;}catch(error){db.exec('ROLLBACK');throw error;}}
-export function getEmployee(id:string){const p=readState().employees.find(e=>e.id===id);if(!p)throw new Error('Участник не зарегистрирован');return p;}
+export function getEmployee(id:string){const p=readState().employees.find(e=>e.id===id);if(!p)throw new Error('Участник не зарегистрирован');if(p.enabled===false)throw new Error('Доступ сотрудника отключён');return p;}
 export function getSource(id:string):Source{const row=database().prepare('SELECT data,dispatched FROM inbox WHERE id=?').get(id) as {data:string;dispatched:number}|undefined;if(!row)throw new Error('Исходное сообщение не найдено');return {...JSON.parse(row.data),dispatched:!!row.dispatched};}
 export function saveSource(s:Source){database().prepare('INSERT OR IGNORE INTO inbox(id,data) VALUES (?,?)').run(s.id,JSON.stringify(s));return getSource(s.id);}
 export function markDispatched(id:string){database().prepare('UPDATE inbox SET dispatched=1 WHERE id=?').run(id);}
