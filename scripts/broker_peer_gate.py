@@ -168,9 +168,11 @@ class PeerGate:
         except (OSError, ValueError, GateError, UnicodeError, RecursionError):
             pass  # No unauthenticated/raw error detail crosses the boundary.
         finally:
-            conn.close()
+            # Retire ownership before close publishes EOF. Otherwise a peer's
+            # next sequential request can race cleanup and be rejected as busy.
             self._connection = None
             self._busy.release()
+            conn.close()
 
     def _pipe(self, fd, deadline, *, data=None, size=None):
         output = bytearray()
