@@ -31,7 +31,17 @@ const assignment = z.object({ enabled: z.boolean(), connectionId: z.string().max
 const rolesSchema = z.object({ coordinator: assignment, analyst: assignment, reviewer: assignment }).strict();
 export type RoleAssignments = z.infer<typeof rolesSchema>;
 export type RoleRoute = { roleId: RoleId; connectionId: string; connectionLabel: string; connectionVersion: string; provider: ProviderId; model: string; maxOutputTokens: number };
-export type Execution = { configurationVersion: string; routes: RoleRoute[]; steps: { roleId: RoleId; call: number; inputTokens?: number; outputTokens?: number }[]; review?: string; errorCode?: string };
+export type BrokerRoleRoute = { roleId:'analyst'|'reviewer'; provider:'yandex-broker'; model:'aliceai-llm-flash'|'deepseek-v4.1-flash'; connectionLabel:string; maxOutputTokens:2048 };
+type ExecutionMetadata = { configurationVersion: string; steps: { roleId: RoleId; call: number; inputTokens?: number; outputTokens?: number }[]; review?: string; policyVersion?: string; modelProtocolVersion?: number; reviewStatus?: 'not_run'|'passed'|'rejected'; reviewCode?: string; errorCode?: string };
+export type Execution = ExecutionMetadata & ({transport?:'direct';routes:RoleRoute[]} | {transport:'broker';routes:BrokerRoleRoute[]});
+export function brokerExecutionPlan(options?:{enabled:boolean;policyHash:string}):Execution & {transport:'broker'} {
+  if (!options?.enabled || !aiEnabledOnServer() || !/^[a-f0-9]{64}$/.test(options.policyHash)) throw new WebError(503, 'Брокер ИИ выключен или не настроен.');
+  const routes:BrokerRoleRoute[] = [
+    {roleId:'analyst',provider:'yandex-broker',model:'aliceai-llm-flash',connectionLabel:'Изолированный брокер',maxOutputTokens:2048},
+    {roleId:'reviewer',provider:'yandex-broker',model:'deepseek-v4.1-flash',connectionLabel:'Изолированный брокер',maxOutputTokens:2048},
+  ];
+  return {transport:'broker',configurationVersion:digest(JSON.stringify({policyHash:options.policyHash,routes})),routes,steps:[]};
+}
 
 // This administrator-owned file contains references to secrets, never their values.
 // Endpoints are fixed in adapters: neither the browser nor a model can redirect a key.
@@ -89,9 +99,9 @@ export function executionPlan(): Execution {
   return { configurationVersion: version(roles, connections), routes: routesFor(roles, connections), steps: [] };
 }
 export function assistantAvailable() { try { executionPlan(); return true; } catch { return false; } }
-// With no environment override, a manager explicitly enables roles in the UI.
+// Explicit administrator opt-in is required in addition to configured roles.
 // No role is enabled in a new database. The administrator can still force AI off.
-export function aiEnabledOnServer() { const value = process.env.ASSISTANT_AI_ENABLED; return value === undefined || value === '' || value === 'true'; }
+export function aiEnabledOnServer() { const value = process.env.ASSISTANT_AI_ENABLED; return value === 'true'; }
 export function roleSettings(actor: Employee) {
   requireManager(actor);
   const connections = loadConnections(), roles = assignments();

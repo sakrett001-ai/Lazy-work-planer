@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { database, updateState } from './store.ts';
 
 const role = z.enum(['coordinator', 'analyst', 'reviewer']);
-const provider = z.enum(['openai', 'vsegpt', 'anthropic', 'gigachat', 'openrouter']);
+const provider = z.enum(['openai', 'vsegpt', 'anthropic', 'gigachat', 'openrouter', 'yandex-broker']);
 const input = z.object({ jobId: z.string().min(1).max(300), roleId: role, call: z.number().int().min(1).max(4), provider }).strict();
 export type ProviderAttempt = z.infer<typeof input> & {
   state: 'started'|'response_received'|'unknown'; startedAt: string; finishedAt?: string;

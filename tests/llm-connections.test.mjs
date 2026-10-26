@@ -12,7 +12,7 @@ const store=await import('../agent/lib/store.ts'),auth=await import('../agent/li
 const {handleDashboardRequest}=await import('../agent/lib/dashboard-api.ts'),{createConsultationRunner}=await import('../agent/lib/consultation-runner.ts');
 const manager={id:'boss',name:'Руководитель',role:'manager'},employee={id:'a',name:'Сотрудник',role:'employee'},secret='test-only-private-api-key-001';
 function reset(){
-  delete process.env.ASSISTANT_AI_ENABLED;
+  process.env.ASSISTANT_AI_ENABLED='true';
   store.updateState(()=>({employees:[manager,employee],tasks:[{id:'T1',title:'Проверить план',employeeId:'a',status:'active'}],sources:[],events:[],settings:{timezone:'Europe/Moscow',startHour:9,endHour:18,minHoursBetween:6,excludedDates:[]}}));
   cfg.roleSettings(manager);proto.preferences('boss');auth.webTables().exec('DELETE FROM llm_connections; DELETE FROM llm_settings; DELETE FROM web_operations; DELETE FROM web_sessions; DELETE FROM web_invites; DELETE FROM web_assistant_jobs;');
   rmSync(join(dir,'llm-master.key'),{force:true});
@@ -38,11 +38,13 @@ test('Ключ вводится через API, шифруется, не выд�
   assert.equal(cfg.credential(cfg.loadConnections()[0]),secret);
 });
 
-test('Первый запуск без env: сохранённый ключ используется выбранной моделью, серверный запрет сохраняется',async()=>{
-  reset();assert.equal(cfg.assistantAvailable(),false);
-  const saved=cfg.saveConnection(command(),manager);enable(saved.connectionId);assert.equal(cfg.assistantAvailable(),true);
+test('Сохранённый ключ не включает ИИ без явного server opt-in',async()=>{
+  reset();delete process.env.ASSISTANT_AI_ENABLED;assert.equal(cfg.assistantAvailable(),false);
+  const saved=cfg.saveConnection(command(),manager);enable(saved.connectionId);assert.equal(cfg.assistantAvailable(),false);
+  assert.throws(()=>cfg.executionPlan());process.env.ASSISTANT_AI_ENABLED='';assert.equal(cfg.assistantAvailable(),false);
+  process.env.ASSISTANT_AI_ENABLED='true';assert.equal(cfg.assistantAvailable(),true);
   const receipt=proto.createAssistantJob({requestId:randomUUID(),taskId:'T1',expectedVersion:proto.versionOf(store.readState().tasks[0]),question:'Как начать?'},manager,true,cfg.executionPlan());let calls=0;
-  await createConsultationRunner({complete:async input=>{calls++;assert.equal(input.key,secret);assert.equal(input.model,'model-small');return{text:JSON.stringify({action:'answer',text:'Уточнить ожидаемый результат.',references:[]})};}})(receipt.jobId);
+  await createConsultationRunner({complete:async input=>{calls++;assert.equal(input.key,secret);assert.equal(input.model,'model-small');return{text:JSON.stringify({protocolVersion:2,action:'answer',text:'Уточнить ожидаемый результат.',references:[]})};}})(receipt.jobId);
   assert.equal(calls,1);assert.equal(proto.getJob(receipt.jobId).status,'completed');assert.ok(!JSON.stringify(proto.getJob(receipt.jobId)).includes(secret));
   process.env.ASSISTANT_AI_ENABLED='false';assert.equal(cfg.assistantAvailable(),false);assert.equal(cfg.roleSettings(manager).enabledOnServer,false);
 });

@@ -14,3 +14,8 @@ node_modules
 config/*.local.json
 llm-master.key
 *.llm-key
+
+# Keep generated evaluation and operational evidence private.
+evals/**/results/
+docs/evidence/
+*.jsonl

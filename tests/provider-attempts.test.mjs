@@ -22,8 +22,10 @@ const config = await import('../agent/lib/llm-config.ts');
 const { handleDashboardRequest } = await import('../agent/lib/dashboard-api.ts');
 const { createConsultationRunner } = await import('../agent/lib/consultation-runner.ts');
 const attempts = await import('../agent/lib/provider-attempts.ts');
+const {sourceVersion}=await import('../agent/lib/assistant-memory.ts');
+const fixtureSource={id:'S1',taskId:'T1',employeeId:'employee',text:'Нужны исходные данные.',receivedAt:'2026-10-24T08:00:00.000Z'};
 const off = { enabled: false, connectionId: null, model: null };
-const answer = { text: JSON.stringify({ action: 'answer', text: 'Запросить исходные данные.', references: [{ sourceId: 'S1', quote: 'Нужны исходные данные.' }] }) };
+const answer = { text: JSON.stringify({ protocolVersion:2, action: 'answer', text: 'Запросить исходные данные.', references: [{ kind:'source',id:'S1',version:sourceVersion(fixtureSource),quote:'Нужны исходные данные.' }] }) };
 const manager = () => store.readState().employees[0];
 function reset() {
   writeFileSync(configFile, JSON.stringify({ connections: [{ id: 'test', label: 'Offline fixture', provider: 'vsegpt', credentialEnv: 'ASSISTANT_LLM_KEY_RECOVERY_TEST', models: ['fixture-model'] }] }));

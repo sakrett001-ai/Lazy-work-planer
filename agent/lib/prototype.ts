@@ -7,7 +7,7 @@ import { validDate, hasPendingStatusRequest } from '../../dist/domain.js';
 import { addTask, editTask, changeTask, savePhase, setPhase, makeDraft, proposal } from '../../dist/workspace-model.js';
 import { saveDecisionDraft } from './decisions.ts';
 import { taskMemory } from '../../dist/task-memory.js';
-import { assistantContext, contextVersion, readSourcePage, sourceVersion, mergeEvidenceReads, verifyReadReferences, type EvidenceRead } from './assistant-memory.ts';
+import { assistantContext, contextVersion, readSourcePage, sourceVersion, mergeEvidenceReads, verifyReadReferences, type EvidenceRead, verifyDecisionReferences, type DecisionReference } from './assistant-memory.ts';
 import type { Execution } from './llm-config.ts';
 import { beginAttempt, readAttempts, markAttemptsUnknown, type AttemptHandle } from './provider-attempts.ts';
 
@@ -173,7 +173,8 @@ export function inviteParticipant(raw: unknown, actor: Employee) {
   return { code: issueInvite(employeeId), expiresInMinutes: 30, employeeId };
 }
 
-export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; contextVersion?: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; startedAt?: string; text?: string; error?: string; recoveryReason?: 'expired'|'execution_uncertain'|'context_changed'; stale?: boolean; references?: {sourceId:string;quote:string;version?:string}[]; contextRead?: {version:string;at:string}; evidenceReads?: EvidenceRead[]; execution?: Execution };
+export const REVIEW_REJECTION_MESSAGE = 'Черновик не прошёл проверку и не опубликован. Можно уточнить вопрос или проверить источники задачи. Автоматический повтор не запускался.';
+export type AssistantJob = { id: string; actorId: string; taskId: string; question: string; taskVersion: string; contextVersion?: string; status: 'pending'|'running'|'completed'|'failed'; createdAt: string; updatedAt: string; startedAt?: string; text?: string; error?: string; recoveryReason?: 'expired'|'execution_uncertain'|'context_changed'; stale?: boolean; references?: {sourceId:string;quote:string;version?:string}[]; contextRead?: {version:string;at:string}; evidenceReads?: EvidenceRead[]; execution?: Execution; decisionReads?: DecisionReference[]; decisionReferences?: ReturnType<typeof verifyDecisionReferences> };
 const expired = (job: AssistantJob) => Date.now() - Date.parse(job.startedAt || job.createdAt) >= 10 * 60000;
 export function getJob(jobId: string): AssistantJob|undefined {
   const row = tables().prepare('SELECT data FROM web_assistant_jobs WHERE id=?').get(jobId) as {data:string}|undefined;
@@ -190,7 +191,15 @@ export function assistantJobs(actor: Employee, taskId: string) {
     if (['pending', 'running'].includes(job.status) && expired(job)) { pendingAssistantJobs(); Object.assign(job, getJob(job.id)); }
     job.stale = Boolean(job.stale) || (job.contextVersion ? job.contextVersion !== current : job.taskVersion !== versionOf(task));
   }
-  return jobs.map(job => ({ ...job, attempts: readAttempts(job.id) }));
+  return jobs.map(job => {
+    const visible = { ...job, execution: job.execution ? { ...job.execution } : undefined, attempts: readAttempts(job.id) };
+    // Reviewer prose may repeat an unsafe draft. Keep it in the internal audit,
+    // never publish it as a second answer (including historical failed jobs).
+    if (visible.execution) delete visible.execution.review;
+    if (visible.status !== 'completed') { delete visible.text; visible.references = []; visible.decisionReferences = []; }
+    if (visible.status === 'failed' && visible.execution?.errorCode === 'review_rejected' && visible.execution.reviewStatus === 'rejected') visible.error = REVIEW_REJECTION_MESSAGE;
+    return visible;
+  });
 }
 export function createAssistantJob(raw: unknown, actor: Employee, available: boolean, execution?: Execution) {
   manager(actor);
@@ -263,7 +272,9 @@ export function claimAssistantJob(jobId: string): AssistantJob|undefined {
   return claimed;
 }
 export function failAssistantJob(jobId: string) {
-  updateState(state => { const job = getJob(jobId); if (job && !['completed', 'failed'].includes(job.status)) { markAttemptsUnknown(job.id); job.status = 'failed'; job.error = 'Ответ ИИ не подтверждён. Память задачи сохранена; можно задать новый вопрос.'; job.updatedAt = new Date().toISOString(); putJob(job); } return state; });
+  updateState(state => { const job = getJob(jobId); if (job && !['completed', 'failed'].includes(job.status)) { markAttemptsUnknown(job.id); job.status = 'failed'; job.error = job.execution?.errorCode === 'review_rejected' && job.execution.reviewStatus === 'rejected'
+    ? REVIEW_REJECTION_MESSAGE
+    : 'Ответ ИИ не подтверждён. Память задачи сохранена; можно задать новый вопрос.'; job.updatedAt = new Date().toISOString(); putJob(job); } return state; });
 }
 export function recordExecution(ctx: any, execution: Execution) {
   updateState(state => { const job = activeWebJob(ctx); job.execution = execution; job.updatedAt = new Date().toISOString(); putJob(job); return state; });
@@ -280,11 +291,12 @@ export function activeWebJob(ctx: any, taskId?: string) {
   if (job.status !== 'running' || expired(job)) throw new WebError(409, 'Консультация завершена или истекло время ожидания. Создайте новый запрос.');
   return job;
 }
-function rememberRead(ctx: any, taskId: string, reads: EvidenceRead[], version?: string) {
+function rememberRead(ctx: any, taskId: string, reads: EvidenceRead[], version?: string, decisions?: DecisionReference[]) {
   if (!ctx.session.auth.current?.attributes?.webJobId) return;
   updateState(state => {
     const job = activeWebJob(ctx, taskId);
     job.evidenceReads = mergeEvidenceReads(job.evidenceReads || [], reads);
+    if (decisions) job.decisionReads = decisions;
     if (version) job.contextRead = { version, at: new Date().toISOString() };
     putJob(job); return state;
   });
@@ -306,7 +318,7 @@ export function beginProviderAttempt(ctx: any, roleId: string, call: number, pro
 export function readAssistantContext(ctx: any, taskId: string) {
   if (ctx.session.auth.current?.attributes?.webJobId) activeWebJob(ctx, taskId);
   const pack = assistantContext(readState(), currentEmployee(ctx), taskId);
-  rememberRead(ctx, taskId, pack.sources.map(s => ({ sourceId: s.sourceId, version: s.version, start: 0, end: s.end })), pack.contextVersion);
+  rememberRead(ctx, taskId, pack.sources.map(s => ({ sourceId: s.sourceId, version: s.version, start: 0, end: s.end })), pack.contextVersion, pack.evidenceState.recordedAcceptance ? [{decisionId:pack.evidenceState.recordedAcceptance.decisionId,version:pack.evidenceState.recordedAcceptance.version}] : []);
   return pack;
 }
 export function readAssistantSource(ctx: any, input: { taskId: string; sourceId: string; version: string; offset?: number; limit?: number }) {
@@ -323,28 +335,32 @@ export function readAssistantHistory(ctx: any, taskId: string, options: {before?
   const task = state.tasks.find(t => t.id === taskId);
   return { ...memory, details: { description: task.description || '', project: task.project || '', protocol: task.protocol || null, phases: task.phases || [] } };
 }
-export function verifyWebEvidence(ctx: any, state: State, references: {sourceId:string;quote:string}[]) {
+export function verifyWebEvidence(ctx: any, state: State, references: {sourceId:string;quote:string}[], decisions: DecisionReference[] = []) {
   const job = activeWebJob(ctx);
   verifyReadReferences(state, job.taskId, job.evidenceReads || [], references);
+  if (job.contextRead && contextVersion(state,currentEmployee(ctx),job.taskId) !== job.contextRead.version) throw new WebError(409, 'Контекст консультации изменился.');
+  verifyDecisionReferences(state,currentEmployee(ctx),job.taskId,decisions,job.decisionReads || []);
   if (!job.contextRead) throw new WebError(409, 'Сначала прочитай актуальную память задачи через get_task_context.');
-  if (!references.length && state.sources.some(s => s.taskId === job.taskId && s.text?.trim())) throw new WebError(400, 'Добавь хотя бы одну проверяемую цитату из сообщения по задаче.');
+  if (!references.length && !decisions.length && state.sources.some(s => s.taskId === job.taskId && s.text?.trim())) throw new WebError(400, 'Добавь хотя бы одну проверяемую цитату из сообщения по задаче.');
   return job;
 }
 export function assertWebReadOnly(ctx: any) {
   if (ctx.session.auth.current?.attributes?.webJobId) throw new Error('Веб-консультация может читать память и готовить черновики. Изменения и отправки выполняет человек в интерфейсе.');
 }
-export function finishAssistantJob(ctx: any, input: {text:string;references:{sourceId:string;quote:string}[]}) {
+export function finishAssistantJob(ctx: any, input: {text:string;references:{sourceId:string;quote:string}[];decisionReferences?:DecisionReference[]}) {
   let result: AssistantJob|undefined;
   updateState(state => {
     const job = webJobFor(ctx), actor = state.employees.find(p => p.id === job.actorId);
     if (!actor || actor.role !== 'manager') throw new Error('Нет доступа к консультации.');
     const task = allowedTask(state, actor, job.taskId);
     if (job.status === 'completed') {
+      if (JSON.stringify((job.decisionReferences || []).map(({decisionId,version})=>({decisionId,version}))) !== JSON.stringify(input.decisionReferences || [])) throw new WebError(409, 'Ответ уже сохранён с другими решениями.');
       if (job.text !== input.text || JSON.stringify(job.references?.map(({sourceId, quote}) => ({sourceId, quote}))) !== JSON.stringify(input.references)) throw new WebError(409, 'Ответ уже сохранён с другим содержимым.');
       result = job; return state;
     }
-    verifyWebEvidence(ctx, state, input.references);
-    Object.assign(job, input, { references: input.references.map(ref => ({ ...ref, version: sourceVersion(state.sources.find(s => s.id === ref.sourceId && s.taskId === task.id)) })),
+    verifyWebEvidence(ctx, state, input.references, input.decisionReferences || []);
+    const decisionReferences = verifyDecisionReferences(state, actor, task.id, input.decisionReferences || [], job.decisionReads || []);
+    Object.assign(job, input, { decisionReferences, references: input.references.map(ref => ({ ...ref, version: sourceVersion(state.sources.find(s => s.id === ref.sourceId && s.taskId === task.id)) })),
       status: 'completed', stale: job.contextVersion ? job.contextVersion !== contextVersion(state, actor, task.id) : versionOf(task) !== job.taskVersion, updatedAt: new Date().toISOString() });
     putJob(job);
     result = job; return state;
