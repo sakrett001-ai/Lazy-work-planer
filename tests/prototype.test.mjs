@@ -132,7 +132,10 @@ test('Веб-консультация: явное подключение, про
   await ok('message',command({taskId:'Т-1',text:'Уточнён контекст.'}),boss);
   await ok('task-action',command({...await target('Т-1',boss),action:'unblock'}),boss);
   const source=store.readState().sources[0];
-  proto.finishAssistantJob(ctx,{text:'Запросить исходные данные, затем уточнить дату.',references:[{sourceId:source.id,quote:source.text}]});
+  const response={text:'Запросить исходные данные, затем уточнить дату.',references:[{sourceId:source.id,quote:source.text}]};
+  assert.throws(()=>proto.finishAssistantJob(ctx,response),/Контекст консультации изменился/);
+  proto.readAssistantContext(ctx,'Т-1');
+  proto.finishAssistantJob(ctx,response);
   const jobs=await ok('assistant?taskId='+encodeURIComponent('Т-1'),undefined,boss);assert.equal(jobs.jobs[0].status,'completed');assert.equal(jobs.jobs[0].stale,true);
   assert.deepEqual((await ok('assistant?taskId='+encodeURIComponent('Т-1'),undefined,a)).jobs,[]);
   assert.equal(store.database().prepare('SELECT count(*) AS n FROM outbox').get().n,0);

@@ -5,12 +5,19 @@ import { handleDashboardRequest } from '../agent/lib/dashboard-api.ts';
 import { serverOrigin } from '../agent/lib/web-auth.ts';
 import { updateState } from '../agent/lib/store.ts';
 import { monitorWorkspace } from '../agent/lib/workspace-monitor.ts';
-import { assistantAvailable } from '../agent/lib/llm-config.ts';
+import { executionPlan, brokerExecutionPlan } from '../agent/lib/llm-config.ts';
 import { createConsultationRunner } from '../agent/lib/consultation-runner.ts';
+import { loadAppBroker } from '../agent/lib/app-broker-config.ts';
 import { createConsultationWorker } from '../agent/lib/consultation-worker.ts';
 
 // Model execution stays outside the shared, side-effect-free dashboard handlers.
-export function createPilotServer({ runConsultation = createConsultationRunner() } = {}) {
+export function createPilotServer({ runConsultation, broker, brokerSelected = process.env.ASSISTANT_BROKER_ENABLED === 'true' } = {}) {
+  // Both entrypoints (prototype and pilot:serve) use this same server-owned path.
+  // Invalid enabled configuration aborts startup; there is no direct fallback.
+  if (broker === undefined && brokerSelected) broker = loadAppBroker();
+  const plan = brokerSelected ? () => brokerExecutionPlan(broker) : executionPlan;
+  const available = () => { try { plan(); return true; } catch { return false; } };
+  runConsultation ||= createConsultationRunner({broker,brokerOnly:brokerSelected});
   let worker;
   const server = createServer(async (req, res) => {
     try {
@@ -24,7 +31,7 @@ export function createPilotServer({ runConsultation = createConsultationRunner()
       const options = { method: req.method, headers: req.headers };
       if (!['GET', 'HEAD'].includes(req.method)) { options.body = Readable.toWeb(req); options.duplex = 'half'; }
       const url = new URL(req.url, origin);
-      const response = await handleDashboardRequest(new Request(url, options), { assistantAvailable: assistantAvailable(), assistantMode: 'roles' });
+      const response = await handleDashboardRequest(new Request(url, options), { assistantAvailable: available(), executionPlan: plan, brokerMode: brokerSelected, assistantMode: 'roles' });
       const job = req.method === 'POST' && url.pathname === '/assistant/api/assistant' && response.ok ? await response.clone().json() : null;
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));

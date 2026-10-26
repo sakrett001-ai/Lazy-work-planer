@@ -7,6 +7,20 @@ const fieldNames = { status:'Состояние', summary:'Что известн
 const shift = (day, n) => new Date(Date.parse(day+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone:'Europe/Moscow' }).format(new Date());
 
+export function decisionEvidenceMarkup(job) {
+  if (job.status !== 'completed') return '';
+  return (job.decisionReferences || []).map(ref => `<blockquote>По записи платформы результат принят.<small>${esc(ref.actorName || 'Руководитель')} · ${esc(ref.at || '')}</small></blockquote>`).join('');
+}
+
+// Host-recorded state, never inferred from model prose or presence of a route.
+export function assistantReviewLabel(job) {
+  if (!job.execution) return 'Независимая проверка не подтверждена.';
+  if (job.execution.reviewStatus === 'passed' && job.status === 'completed') return 'Ответ прошёл проверку моделью; решение остаётся за тобой.';
+  if (job.execution.reviewStatus === 'rejected') return 'Проверяющий отклонил ответ; черновик не опубликован.';
+  if (job.execution.reviewStatus === 'not_run' && job.status === 'completed') return 'Независимая проверка не выполнялась.';
+  return 'Независимая проверка не подтверждена.';
+}
+
 // Derived presentation only: approved deadline, never creation/start or proposedDue.
 export function deadlineState(task, now = Date.now()) {
   if (task.status === 'done') return { text:'Завершено', kind:'done' };
@@ -325,7 +339,7 @@ export function installPrototype(ctx) {
     const id=selected, actorId=identity.id, context=ctx.detailContext(); jobsFor=id;
     try { const data=await ctx.api('assistant?taskId='+encodeURIComponent(id));if(context!==ctx.detailContext()||state().selected!==id||state().identity?.id!==actorId||!$('#assistant-jobs'))return;
       const box=$('#assistant-jobs'),signature=JSON.stringify(data.jobs);if(jobViews.get(box)===signature)return;
-      box.innerHTML=data.jobs.map(job=>`<article class="ai-result"><small>${ctx.date(job.createdAt,true)} · ${({pending:'В очереди',running:'Ассистент работает',completed:'Ответ подготовлен',failed:'Требуется повторный запрос'})[job.status]}</small><h4>${esc(job.question)}</h4>${executionMarkup(job)}${job.stale?'<p class="message">В задаче появились новые сведения. Сверь ответ с актуальной памятью или задай новый вопрос.</p>':''}<p>${esc(job.text||job.error||'Можно продолжать работать с доской.')}</p>${(job.references||[]).map(ref=>`<blockquote>${esc(ref.quote)}<small>Цитата из сообщения по задаче</small>${sourceReader(ref.sourceId,ref.version)}</blockquote>`).join('')}</article>`).join('');
+      box.innerHTML=data.jobs.map(job=>`<article class="ai-result"><small>${ctx.date(job.createdAt,true)} · ${({pending:'В очереди',running:'Ассистент работает',completed:'Ответ подготовлен',failed:'Ответ не опубликован'})[job.status]}</small><h4>${esc(job.question)}</h4>${executionMarkup(job)}<p class="report-note">${esc(assistantReviewLabel(job))}</p>${job.stale?'<p class="message">В задаче появились новые сведения. Сверь ответ с актуальной памятью или задай новый вопрос.</p>':''}<p>${esc(job.text||job.error||'Можно продолжать работать с доской.')}</p>${decisionEvidenceMarkup(job)}${(job.references||[]).map(ref=>`<blockquote>${esc(ref.quote)}<small>Цитата из сообщения по задаче</small>${sourceReader(ref.sourceId,ref.version)}</blockquote>`).join('')}</article>`).join('');
       jobViews.set(box,signature);
     } catch(error) {if(context===ctx.detailContext()&&state().selected===id&&state().identity?.id===actorId&&$('#assistant-jobs')){jobViews.delete($('#assistant-jobs'));$('#assistant-jobs').textContent=error.message;}}
   }
@@ -404,7 +418,7 @@ export function installPrototype(ctx) {
   function executionMarkup(job) {
     if(!job.execution)return '';
     const errors={auth:'Провайдер отклонил ключ или доступ к модели.',rate_limit:'Достигнут лимит провайдера.',timeout:'Истекло время ожидания модели.',network:'Не удалось связаться с провайдером.',context_changed:'Данные задачи изменились во время разбора. Задай вопрос заново.',review_rejected:'Проверяющий не подтвердил ответ.',disabled:'ИИ выключен на сервере.',configuration:'Подключение требует настройки.',evidence:'Не удалось подтвердить основания ответа.',step_limit:'Достигнут лимит чтения источников.',incomplete:'Модель не завершила ответ.',provider:'Провайдер вернул ошибку.',protocol:'Формат ответа не прошёл проверку.',validation:'Ответ или доступ к задаче не прошёл проверку.',context_size:'Контекст превысил лимит консультации.',response_size:'Ответ превысил допустимый размер.'};
-    return `<details class="role-trace"><summary>Кто подготовил ответ</summary><ul>${job.execution.routes.map(r=>`<li><strong>${esc(roleNames[r.roleId]||r.roleId)}</strong> · ${esc(r.connectionLabel)} · ${esc(r.provider)} · ${esc(r.model)}</li>`).join('')}</ul>${job.execution.review?`<p>Проверка: ${esc(job.execution.review)}</p>`:''}${job.execution.errorCode?`<p class="message">${esc(errors[job.execution.errorCode]||'Ответ не подтверждён.')}</p>`:''}</details>`;
+    return `<details class="role-trace"><summary>Кто подготовил ответ</summary><ul>${job.execution.routes.map(r=>`<li><strong>${esc(roleNames[r.roleId]||r.roleId)}</strong> · ${esc(r.connectionLabel)} · ${esc(r.provider)} · ${esc(r.model)}</li>`).join('')}</ul>${job.execution.errorCode?`<p class="message">${esc(errors[job.execution.errorCode]||'Ответ не подтверждён.')}</p>`:''}</details>`;
   }
   function canRefresh() {return !modalOpen()&&!ctx.busy()&&!document.hidden&&Date.now()-lastInteraction>8000&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);}
   const interact=()=>{lastInteraction=Date.now();};document.addEventListener('pointerdown',interact);document.addEventListener('keydown',interact);

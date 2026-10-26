@@ -11,7 +11,7 @@ import { createReport, readReports } from './task-reports.ts';
 import { preferences, prototypePaths, prototypeWrite, inviteParticipant, createAssistantJob, assistantJobs, versionOf } from './prototype.ts';
 import { proposal } from '../../dist/workspace-model.js';
 import { assistantContext, readSourcePage } from './assistant-memory.ts';
-import { roleSettings, saveRoleSettings, saveConnection, executionPlan } from './llm-config.ts';
+import { roleSettings, saveRoleSettings, saveConnection, executionPlan, type Execution } from './llm-config.ts';
 
 const reportSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), text: z.string().trim().min(1).max(4000) }).strict();
 const decisionSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), action: z.enum(['accept', 'approve_due', 'reject_due', 'take_control']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -46,7 +46,7 @@ async function readJson(request: Request) {
   catch { throw new WebError(400, 'Не удалось прочитать запрос.'); }
 }
 
-type DashboardOptions = { assistantAvailable?: boolean; assistantMode?: 'roles'|'eve' };
+type DashboardOptions = { assistantAvailable?: boolean; assistantMode?: 'roles'|'eve'; executionPlan?:()=>Execution; brokerMode?:boolean };
 async function route(request: Request, options: DashboardOptions) {
   const url = new URL(request.url), path = url.pathname;
   if (request.method === 'GET' && assets[path]) {
@@ -95,8 +95,9 @@ async function route(request: Request, options: DashboardOptions) {
   if (path === '/assistant/api/assistant' && request.method === 'GET') return json({ jobs: assistantJobs(actor, url.searchParams.get('taskId') || '') });
   if (path === '/assistant/api/assistant' && request.method === 'POST') {
     if (actor.role !== 'manager') throw new WebError(403, 'Консультация доступна руководителю.');
-    return json(createAssistantJob(await readJson(request), actor, Boolean(options.assistantAvailable), options.assistantMode === 'roles' && options.assistantAvailable ? executionPlan() : undefined));
+    return json(createAssistantJob(await readJson(request), actor, Boolean(options.assistantAvailable), options.assistantMode === 'roles' && options.assistantAvailable ? (options.executionPlan || executionPlan)() : undefined));
   }
+  if (options.brokerMode && ['/assistant/api/llm-settings','/assistant/api/llm-connection'].includes(path)) throw new WebError(403, 'Подключением брокера управляет администратор сервера; прямые ключи в этом режиме не используются.');
   if (path === '/assistant/api/llm-settings' && request.method === 'GET') return json(roleSettings(actor));
   if (path === '/assistant/api/llm-settings' && request.method === 'POST') return json(saveRoleSettings(await readJson(request), actor));
   if (path === '/assistant/api/llm-connection' && request.method === 'POST') return json(saveConnection(await readJson(request), actor));

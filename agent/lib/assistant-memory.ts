@@ -16,15 +16,38 @@ function access(state: State, actor: Employee, taskId: string) {
 function sourceRecord(source: any) {
   return { id: source.id, taskId: source.taskId, employeeId: source.employeeId,
     authorName: source.authorName || null, text: source.text || '',
-    occurredAt: source.occurredAt || source.receivedAt || null, receivedAt: source.receivedAt || null,
+    occurredAt: source.occurredAt || source.receivedAt || null, eventTimeProvided: Boolean(source.occurredAt), receivedAt: source.receivedAt || null,
     kind: source.kind || null, simulated: Boolean(source.simulated) };
 }
 export function sourceVersion(source: any) { return digest(JSON.stringify(sourceRecord(source))); }
 
+export type DecisionReference = { decisionId: string; version: string };
+function requesterRecord(actor: Employee) { return { id: actor.id, role: actor.role || 'employee', name: Array.from(String(actor.name || '')).slice(0,120).join(''), provenance: 'authenticated_actor' as const }; }
+function acceptanceRecord(state: State, task: any) {
+  const origin = task.factOrigins?.status;
+  const event = task.status === 'done' && origin?.eventId && !origin.sourceId
+    ? state.events.find(e => e.taskId === task.id && e.key === origin.eventId && e.kind === 'decision' && e.action === 'accept' && typeof e.actorId === 'string' && e.actorId && e.changes?.status?.before === 'review' && e.changes?.status?.after === 'done') : undefined;
+  if (!event) return null;
+  const person = state.employees.find(p => p.id === event.actorId);
+  if (!person || typeof event.at !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(event.at) || !Number.isFinite(Date.parse(event.at))) return null;
+  const record = { decisionId: event.key, taskId: task.id, action: 'accept' as const, actorId: event.actorId,
+    actorName: String(person?.name || 'Руководитель').slice(0, 120), at: event.at, provenance: 'stored_workflow_decision' as const };
+  return { ...record, version: digest(JSON.stringify({ record, changes: event.changes, statusOrigin: origin })) };
+}
+export function verifyDecisionReferences(state: State, actor: Employee, taskId: string, references: DecisionReference[], reads: DecisionReference[]) {
+  const {task} = access(state, actor, taskId), record = acceptanceRecord(state, task);
+  if (references.length > 1) throw new WebError(400, 'Для текущей приёмки допустима одна запись решения.');
+  return references.map(ref => {
+    if (!reads.some(read => read.decisionId === ref.decisionId && read.version === ref.version)) throw new WebError(409, 'Сначала прочитай запись решения в текущем контексте.');
+    if (!record || ref.decisionId !== record.decisionId || ref.version !== record.version) throw new WebError(409, 'Решение не относится к актуальной приёмке этой задачи. Перечитай контекст.');
+    return record;
+  });
+}
+
 /** Draft generation and personal pins do not invalidate the underlying facts. */
 export function contextVersion(state: State, actor: Employee, taskId: string) {
-  const { task } = access(state, actor, taskId);
-  return digest(JSON.stringify({ task,
+  const { task, actor: current } = access(state, actor, taskId);
+  return digest(JSON.stringify({ task, requester: requesterRecord(current), recordedAcceptance: acceptanceRecord(state, task),
     sources: state.sources.filter(s => s.taskId === taskId).map(sourceRecord),
     decisions: state.events.filter(e => e.taskId === taskId && e.kind === 'decision'),
   }));
@@ -57,17 +80,21 @@ export function assistantContext(state: State, actor: Employee, taskId: string) 
     return chars.slice(0, limit).join('');
   };
   const allSources = state.sources.filter(s => s.taskId === taskId);
+  const acceptance = acceptanceRecord(state, task);
   const preferredIds = [...new Set([task.latestSourceId, ...memory.facts.map(f => f.origin.sourceId), ...allSources.slice().reverse().map(s => s.id)].filter(Boolean))];
   const sources = preferredIds.slice(0, 8).flatMap(id => {
     const source = allSources.find(s => s.id === id);
     if (!source) return [];
     const page = readSourcePage(state, checked.actor, { taskId, sourceId: id, limit: 320 });
     return [{ sourceId: page.id, version: page.version, author: clip(page.authorName, 120, `source:${id}:author`),
-      occurredAt: page.occurredAt, receivedAt: page.receivedAt, preview: page.text, end: page.end,
+      occurredAt: page.occurredAt, receivedAt: page.receivedAt, eventTimeProvided: page.eventTimeProvided, preview: page.text, end: page.end,
       totalCharacters: page.totalCharacters, nextOffset: page.nextOffset, trust: page.trust, simulated: page.simulated }];
   });
   const pack = {
     schemaVersion: 1, taskId, contextVersion: contextVersion(state, checked.actor, taskId), provenance: 'stored_records',
+    evidenceState: { sourceOrder: 'relevance_not_chronology', latestSourceId: allSources.some(s => s.id === task.latestSourceId) ? task.latestSourceId : null,
+      sourceReportsAreDecisions: false, recordedAcceptance: acceptance },
+    requester: requesterRecord(checked.actor),
     current: {
       title: clip(task.title, 200, 'title'), description: clip(task.description, 700, 'description'),
       employee: { id: task.employeeId, name: clip(state.employees.find(p => p.id === task.employeeId)?.name, 120, 'employee.name') },
