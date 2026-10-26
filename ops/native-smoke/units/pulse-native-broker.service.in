@@ -1,0 +1,45 @@
+# TEMPLATE: replace exact approved immutable release and literal current IP allowlist.
+[Unit]
+Description=Finite isolated Pulse synthetic model broker
+StopWhenUnneeded=yes
+RefuseManualStart=yes
+
+[Service]
+Type=exec
+User=997
+# Account private primary group remains987; socket must be created with IPC group986.
+Group=986
+SupplementaryGroups=987
+WorkingDirectory=@TEST_RELEASE@
+ExecStart=/usr/bin/python3 @TEST_RELEASE@/scripts/broker-launcher.py --config /run/pulse-native-smoke/broker-private/launcher.json
+Restart=no
+RuntimeMaxSec=550
+TimeoutStartSec=10
+TimeoutStopSec=10
+KillMode=control-group
+SendSIGKILL=yes
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+# One IPAddressAllow line per verified DNS resolver/provider address; no subnet expansion.
+@BROKER_IP_ALLOW_LINES@
+ReadOnlyPaths=/run/pulse-native-smoke/broker-private
+ReadWritePaths=/var/lib/markus-broker /run/pulse-native-smoke/ipc
+InaccessiblePaths=/var/lib/pulse /run/pulse-native-smoke/app-private
+MemoryMax=256M
+TasksMax=32
+CPUQuota=50%
+StandardOutput=journal
+StandardError=journal

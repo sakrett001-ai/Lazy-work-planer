@@ -1,0 +1,45 @@
+[Unit]
+Description=Two invented Pulse jobs, no public server or delivery
+Requires=pulse-native-broker.service
+BindsTo=pulse-native-broker.service
+After=pulse-native-broker.service
+
+[Service]
+Type=exec
+User=999
+Group=988
+SupplementaryGroups=986
+WorkingDirectory=@TEST_RELEASE@
+# Finite readiness wait checks filesystem socket only, never sends a health/model call.
+ExecStartPre=/usr/bin/python3 @PACKAGE_PATH@/finite-run.py wait-socket
+ExecStart=/opt/node-v24.22.1-linux-x64/bin/node @TEST_RELEASE@/scripts/markus-smoke.mjs --run-synthetic-smoke --root=/var/lib/pulse-markus-smoke/run-once --broker-config=/run/pulse-native-smoke/app-private/app.json --policy-sha256=@POLICY_SHA256@
+Restart=no
+RuntimeMaxSec=540
+TimeoutStartSec=10
+TimeoutStopSec=10
+KillMode=control-group
+SendSIGKILL=yes
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadOnlyPaths=/run/pulse-native-smoke/app-private
+ReadWritePaths=/var/lib/pulse-markus-smoke
+InaccessiblePaths=/var/lib/pulse /var/lib/markus-broker /run/pulse-native-smoke/broker-private
+MemoryMax=384M
+TasksMax=32
+CPUQuota=50%
+StandardOutput=journal
+StandardError=journal

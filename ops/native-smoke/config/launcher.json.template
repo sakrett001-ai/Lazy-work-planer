@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "socketPath": "/run/pulse-native-smoke/ipc/broker.sock",
+  "allowedUid": 999,
+  "nodeExecutable": "/opt/node-v24.22.1-linux-x64/bin/node",
+  "workerConfigPath": "/run/pulse-native-smoke/broker-private/worker.json"
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "ledgerPath": "/var/lib/markus-broker/native-smoke-ledger.sqlite",
+  "allocationPath": "/var/lib/markus-broker/allocations.sqlite",
+  "allocationId": "synthetic-smoke-native-01",
+  "ipcKeyFile": "/run/pulse-native-smoke/broker-private/ipc.key",
+  "providerCredentialFile": "/run/pulse-native-smoke/broker-private/provider.json",
+  "policy": {
+    "version": 1,
+    "folderId": "REPLACE_APPROVED_FOLDER",
+    "totalMicroRub": 500000000,
+    "jobMicroRub": 350000000,
+    "totalCalls": 20,
+    "jobCalls": 8,
+    "concurrency": 1,
+    "timeoutMs": 45000,
+    "analyst": {
+      "inputTokenBound": 65536,
+      "inputMicroRubPerToken": 100,
+      "outputMicroRubPerToken": 200
+    },
+    "reviewer": {
+      "inputTokenBound": 1048576,
+      "inputMicroRubPerToken": 300,
+      "outputMicroRubPerToken": 500
+    },
+    "systemHashes": {
+      "analyst": "a569e6c0c3c258aa220552e9780c3973e6abbf1b7192c9ca9bae2427f411b318",
+      "reviewer": "156d0c0867d486f72dd481936a8001d06801cde6aa516529b0893f0b2e35931c"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "policyHash": "REPLACE_HASH_USING_brokerPolicyFingerprint",
+  "socketPath": "/run/pulse-native-smoke/ipc/broker.sock",
+  "expectedOwnerUid": 997,
+  "ipcKeyFile": "/run/pulse-native-smoke/app-private/ipc.key"
+}
