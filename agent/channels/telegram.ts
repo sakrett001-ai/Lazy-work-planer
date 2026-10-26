@@ -11,7 +11,7 @@ export default defineChannel({audience(){return 'private';},routes:[POST('/assis
   const message=update.message;
   if(!message||message.chat?.type!=='private'||message.from?.is_bot||typeof message.text!=='string'||!Number.isSafeInteger(message.message_id))return new Response('ok');
   const state=readState(),person=state.employees.find(p=>p.telegramId===String(message.from?.id));
-  if(!person||String(message.chat.id)!==person.telegramId)return new Response('ok');
+  if(!person||person.enabled===false||String(message.chat.id)!==person.telegramId)return new Response('ok');
   const own=state.tasks.filter(t=>t.employeeId===person.id),mentioned=mentionedTaskIds(message.text,own);
   const taskId=mentioned.length===1?mentioned[0]:null;
   const receivedAt=new Date().toISOString(),occurredAt=Number.isFinite(message.date)&&message.date>0?new Date(message.date*1000).toISOString():receivedAt;
