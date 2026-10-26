@@ -1,0 +1,20 @@
+# TEMPLATE ONLY. Freshly verified resolver(s), provider A/AAAA; no historical default.
+# Atomic addition only. Existing table name => STOP, never delete/flush unrelated rules.
+table inet pulse_native_smoke {
+  set dns4 { type ipv4_addr; elements = { @DNS4@ }; }
+  set dns6 { type ipv6_addr; elements = { @DNS6@ }; }
+  set provider4 { type ipv4_addr; elements = { @PROVIDER4@ }; }
+  set provider6 { type ipv6_addr; elements = { @PROVIDER6@ }; }
+  chain output {
+    type filter hook output priority 0; policy accept;
+    meta skuid 997 ip daddr 169.254.0.0/16 reject
+    meta skuid 997 ip6 daddr fe80::/10 reject
+    meta skuid 997 ip daddr @dns4 udp dport 53 accept
+    meta skuid 997 ip daddr @dns4 tcp dport 53 accept
+    meta skuid 997 ip6 daddr @dns6 udp dport 53 accept
+    meta skuid 997 ip6 daddr @dns6 tcp dport 53 accept
+    meta skuid 997 ip daddr @provider4 tcp dport 443 accept
+    meta skuid 997 ip6 daddr @provider6 tcp dport 443 accept
+    meta skuid 997 reject
+  }
+}
