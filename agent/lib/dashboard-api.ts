@@ -1,3 +1,4 @@
+import { sharedDocumentRoute } from './shared-documents.ts';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
@@ -16,6 +17,9 @@ import { roleSettings, saveRoleSettings, saveConnection, executionPlan, type Exe
 const reportSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), text: z.string().trim().min(1).max(4000) }).strict();
 const decisionSchema = z.object({ requestId: z.uuid(), taskId: z.string().min(1).max(100), action: z.enum(['accept', 'approve_due', 'reject_due', 'take_control']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const assets: Record<string, [string, string]> = {
+  '/assistant/workbench': ['workbench.html', 'text/html; charset=utf-8'],
+  '/assistant/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'],
+  '/assistant/workbench.css': ['workbench.css', 'text/css; charset=utf-8'],
   '/assistant/workspace': ['pilot.html', 'text/html; charset=utf-8'],
   '/assistant/pilot.html': ['pilot.html', 'text/html; charset=utf-8'],
   '/assistant/pilot.js': ['pilot.js', 'text/javascript; charset=utf-8'],
@@ -63,6 +67,7 @@ async function route(request: Request, options: DashboardOptions) {
   }
   const auth = session(request), actor = auth.actor;
   if (request.method === 'POST') requireCsrf(request, auth.csrf);
+  if (path.startsWith('/assistant/api/documents')) { const response = await sharedDocumentRoute(request, actor); if (response) return response; }
   if (path === '/assistant/api/logout' && request.method === 'POST') {
     logout(auth.hash);
     return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': sessionCookie() } });

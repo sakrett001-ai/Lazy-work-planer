@@ -1,0 +1,25 @@
+{
+  "parts": [
+    "head.html",
+    "stage-workflow.js",
+    "access.js",
+    "task-memory.js",
+    "domain.js",
+    "pulse-signal.js",
+    "pulse-motion.js",
+    "notification-state.js",
+    "prototype-ui.js",
+    "simulation.js",
+    "adapter.js",
+    "tail.html"
+  ],
+  "baseline_sha256": "c2365691c5ae7d0d2d233a86f6a8553a2410b5fecf287529ee81f718e1bf4c1b",
+  "styles_sha256": [
+    "bc2c06ad2bf0c041f65d1ed152fc734ca1915d3c15d3fa723d561ad934ace5ba",
+    "d2ff5019bb944e0e0e753ce6b2dd38fc8c65db05864811b55285953a9c65abde",
+    "cd60c0d791df8551d0fb4954d22ed188414d74a15d9339080179432f8eece211",
+    "8ee00f5024de972c7f4bc46a4e19788fe24a307fcb6ce727985fbd7fddcb336a"
+  ],
+  "workarea_baseline_version": 12,
+  "workarea_baseline_sha256": "4faeb7b26a98da36a346bec757db9db1d055d1cfe4a4eb5eab95d88a723320e0"
+}

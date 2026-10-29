@@ -1,3 +1,4 @@
+import { documentReference } from './shared-documents.ts';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { readState, updateState, currentEmployee, type Employee, type State } from './store.ts';
@@ -28,7 +29,7 @@ const schemas = {
   'task-action': z.object({ ...target, action: z.enum(['start', 'reopen', 'rework', 'unblock']) }).strict(),
   'phase-save': z.object({ ...target, phaseId: id.nullable(), phase: z.object({ title: z.string().trim().min(1).max(120), start: day.refine(Boolean), end: day.refine(Boolean), dependsOn: id.nullable() }).strict() }).strict(),
   'phase-toggle': z.object({ ...target, phaseId: id, done: z.boolean() }).strict(),
-  'message': z.object({ ...operation, taskId: id, text: z.string().trim().min(1).max(4000), requestUpdate: z.boolean().default(false) }).strict(),
+  'message': z.object({ ...operation, taskId: id, text: z.string().trim().min(1).max(4000), requestUpdate: z.boolean().default(false), documentReference: z.object({documentId:z.uuid(),versionId:z.uuid()}).strict().optional() }).strict(),
   'draft-create': z.object({ ...target, kind: z.enum(['extension', 'request', 'clarify', 'plan', 'review']) }).strict(),
   'draft-save': z.object({ ...operation, draftId: id, expectedVersion: version, expectedTaskVersion: version, title: z.string().trim().min(1).max(200), body: z.string().trim().min(1).max(6000), status: z.enum(['draft', 'approved']) }).strict(),
   'pin': z.object({ ...operation, taskId: id, pinned: z.boolean() }).strict(),
@@ -113,13 +114,14 @@ export function prototypeWrite(path: string, raw: unknown, actor: Employee): unk
       } else if (path === 'phase-toggle') {
         next = setPhase(state, task.id, input.phaseId, input.done, new Date(at));
       } else if (path === 'message') {
+        const reference = input.documentReference ? documentReference(current, task.id, input.documentReference) : undefined;
         if (task.status === 'done') throw new WebError(409, 'Сначала верните задачу в работу.');
         if (input.requestUpdate && hasPendingStatusRequest(task)) {
           receipt.alreadyPending = true;
           db.prepare('INSERT INTO web_operations VALUES (?,?,?)').run(key, requestHash, JSON.stringify(receipt));
           return state;
         }
-        const source = { id: key, taskId: task.id, employeeId: current.id, text: input.text, occurredAt: at, receivedAt: at, channel: 'workspace', kind: 'manager_message' };
+        const source = { id: key, taskId: task.id, employeeId: current.id, text: input.text, occurredAt: at, receivedAt: at, channel: 'workspace', kind: 'manager_message', ...(reference ? {documentReference:reference} : {}) };
         state.sources.push(source);
         state.events.unshift({ key, sourceId: key, taskId: task.id, actorId: current.id, kind: 'manager_message', at, text: input.requestUpdate ? 'Руководитель запросил обновление в обсуждении задачи.' : 'Сообщение руководителя в обсуждении задачи.' });
         if (input.requestUpdate && !['done', 'review'].includes(task.status)) { task.lastRequestedAt = at; task.contact = 'awaiting'; }
